@@ -18,7 +18,7 @@ pub fn build_code_lens(
                 match client_id {
                     ClientId::VSCode => {}
                     _ => {
-                        add_func_stat_override_code_lens(semantic_model, &mut result, clone)?;
+                        add_func_stat_override_code_lens(semantic_model, &mut result, clone);
                     }
                 }
             }
