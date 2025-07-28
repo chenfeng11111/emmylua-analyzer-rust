@@ -53,6 +53,7 @@ pub(crate) use infer::{infer_call_expr_func, infer_expr};
 use overload_resolve::resolve_signature;
 pub use semantic_info::SemanticDeclLevel;
 pub use type_check::{TypeCheckFailReason, TypeCheckResult};
+use crate::semantic::member::get_lua_behavior_args_map;
 
 #[derive(Debug)]
 pub struct SemanticModel<'a> {
@@ -135,6 +136,10 @@ impl<'a> SemanticModel<'a> {
         prefix_type: &LuaType,
     ) -> Option<HashMap<LuaMemberKey, Vec<LuaMemberInfo>>> {
         get_member_map(self.db, prefix_type)
+    }
+
+    pub fn get_lua_behavior_args_map(&self, prefix_type: &LuaType) -> Option<HashMap<LuaMemberKey, Vec<LuaMemberInfo>>>  {
+        get_lua_behavior_args_map(self.db, prefix_type)
     }
 
     pub fn type_check(&self, source: &LuaType, compact_type: &LuaType) -> TypeCheckResult {

@@ -1,16 +1,36 @@
 use emmylua_code_analysis::{LuaDeclId, LuaSignatureId, LuaType};
 use emmylua_parser::{
     LuaAssignStat, LuaAstNode, LuaAstToken, LuaForRangeStat, LuaForStat, LuaFuncStat,
-    LuaIfClauseStat, LuaIfStat, LuaLocalFuncStat, LuaLocalStat,
+    LuaIfClauseStat, LuaIfStat, LuaLocalFuncStat, LuaLocalStat, LuaSyntaxKind, LuaSyntaxNode,
 };
 use lsp_types::SymbolKind;
+use std::ops::Add;
 
 use super::builder::{DocumentSymbolBuilder, LuaSymbol};
+
+fn is_in_function(node: &LuaSyntaxNode) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(
+            parent.kind().into(),
+            LuaSyntaxKind::LocalFuncStat | LuaSyntaxKind::FuncStat | LuaSyntaxKind::ClosureExpr
+        ) {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
+}
 
 pub fn build_local_stat_symbol(
     builder: &mut DocumentSymbolBuilder,
     local_stat: LuaLocalStat,
 ) -> Option<()> {
+    let is_in_function = is_in_function(local_stat.syntax());
+    if is_in_function {
+        return None;
+    }
+
     let file_id = builder.get_file_id();
     let local_names: Vec<_> = local_stat.get_local_name_list().collect();
     let simple_local = local_names.len() == 1;
@@ -26,7 +46,7 @@ pub fn build_local_stat_symbol(
             decl.get_range()
         };
 
-        let symbol = LuaSymbol::new(decl.get_name().to_string(), desc.1, desc.0, range);
+        let symbol = LuaSymbol::new(format!("local {}", decl.get_name().to_string()), desc.1, desc.0, range);
 
         builder.add_node_symbol(local_name.syntax().clone(), symbol);
     }
@@ -54,7 +74,7 @@ pub fn build_assign_stat_symbol(
         };
         let typ = builder.get_type(decl_id.into());
         let desc = builder.get_symbol_kind_and_detail(Some(&typ));
-        let symbol = LuaSymbol::new(decl.get_name().to_string(), desc.1, desc.0, range);
+        let symbol = LuaSymbol::new(format!("global {}", decl.get_name().to_string()), desc.1, desc.0, range);
 
         builder.add_node_symbol(var.syntax().clone(), symbol);
     }
@@ -134,16 +154,12 @@ pub fn build_local_func_stat_symbol(
     let decl = builder.get_decl(&decl_id)?;
     let typ = builder.get_type(decl_id.into());
     let desc = builder.get_symbol_kind_and_detail(Some(&typ));
-
-    let full_range = local_func.get_range();
-    let name_range = decl.get_range();
-
-    let symbol = LuaSymbol::with_selection_range(
-        decl.get_name().to_string(),
-        desc.1,
+    let name = decl.get_name();
+    let symbol = LuaSymbol::new(
+        format!("local {}{}", name, desc.1.unwrap_or_default()),
+        None,
         desc.0,
-        full_range,
-        name_range,
+        decl.get_range(),
     );
 
     builder.add_node_symbol(local_func.syntax().clone(), symbol);
@@ -161,11 +177,12 @@ pub fn build_func_stat_symbol(
     let signature_id = LuaSignatureId::from_closure(file_id, &closure);
     let func_ty = LuaType::Signature(signature_id);
     let desc = builder.get_symbol_kind_and_detail(Some(&func_ty));
-
-    let full_range = func.get_range();
-    let name_range = func_name.get_range();
-
-    let symbol = LuaSymbol::with_selection_range(name, desc.1, desc.0, full_range, name_range);
+    let symbol = LuaSymbol::new(
+        name.add(desc.1.unwrap_or_default().as_str()),
+        None,
+        desc.0,
+        func.get_range(),
+    );
 
     builder.add_node_symbol(func.syntax().clone(), symbol);
     Some(())

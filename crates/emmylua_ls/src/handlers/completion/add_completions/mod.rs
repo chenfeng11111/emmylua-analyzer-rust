@@ -2,13 +2,14 @@ mod add_decl_completion;
 mod add_member_completion;
 mod check_match_word;
 
+use std::ops::Add;
 pub use add_decl_completion::add_decl_completion;
 pub use add_member_completion::extract_index_member_alias;
 pub use add_member_completion::{CompletionTriggerStatus, add_member_completion};
 pub use check_match_word::check_match_word;
 use emmylua_code_analysis::{LuaSemanticDeclId, LuaType, RenderLevel};
 use lsp_types::CompletionItemKind;
-
+use rowan::{TextRange, TextSize};
 use emmylua_code_analysis::humanize_type;
 
 use super::completion_builder::CompletionBuilder;
@@ -174,5 +175,67 @@ fn get_description(builder: &CompletionBuilder, typ: &LuaType) -> Option<String>
             typ,
             RenderLevel::Minimal,
         )),
+    }
+}
+
+fn get_function_insert_text(
+    builder: &CompletionBuilder,
+    display: CallDisplay,
+    label: &str,
+    need_parentheses: bool,
+    typ: &LuaType,
+) -> String {
+    let end = builder.trigger_token.text_range().end();
+
+    let document = builder.semantic_model.get_document();
+    let text_len = document.get_valid_range();
+
+    let next_is_parenthesis = if end.add(TextSize::new(1)) > TextSize::new(text_len) {
+        false
+    } else {
+        let range = TextRange::new(end, end.add(TextSize::new(1)));
+        let char = document.get_text_slice(range);
+        char == "("
+    };
+
+    if !next_is_parenthesis
+        && need_parentheses
+        && (matches!(typ, LuaType::DocFunction(_)) || matches!(typ, LuaType::Signature(_)))
+    {
+        let mut param_count = match typ {
+            LuaType::DocFunction(func) => func.get_params().len(),
+            LuaType::Signature(signature_id) => {
+                let signature = builder
+                    .semantic_model
+                    .get_db()
+                    .get_signature_index()
+                    .get(&signature_id);
+                if let Some(value) = signature {
+                    value.get_type_params().len()
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+
+        match display {
+            CallDisplay::AddSelf => {
+                param_count += 1;
+            }
+            CallDisplay::RemoveFirst => {
+                if param_count > 0 {
+                    param_count -= 1;
+                }
+            }
+            _ => {}
+        }
+        if param_count > 0 {
+            format!("{}(${{1}})${{0}}", label)
+        } else {
+            format!("{}()", label)
+        }
+    } else {
+        label.to_string()
     }
 }

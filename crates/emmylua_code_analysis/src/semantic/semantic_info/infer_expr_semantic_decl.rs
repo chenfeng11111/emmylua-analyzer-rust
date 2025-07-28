@@ -299,6 +299,19 @@ fn infer_custom_type_member_semantic_decl(
     }
 
     if type_decl.is_class() {
+        let name_str = member_key.get_name();
+        if let Some(name_str) = name_str {
+            if db.get_emmyrc().runtime.constructor.contains(&String::from(name_str)) {
+                if let Some(member_item) = db.get_member_index().get_constructor_call_func(db, &prefix_type_id) {
+                    // 这里不需要再判断一次member是 Signature or DocFunction 了，在get_constructor_call_func中已经判断过一次，是这两个类型才会返回
+                    return member_item.resolve_semantic_decl(db);
+                }
+            }
+        }
+        if let Some(member_item) = db.get_member_index().get_member_lua_behavior(db, &prefix_type_id, &member_key) {
+            return member_item.resolve_semantic_decl(db);
+        }
+        
         let super_types = type_index.get_super_types(&prefix_type_id)?;
         for super_type in super_types {
             if let Some(property) = infer_member_semantic_decl_by_member_key(

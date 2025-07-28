@@ -5,9 +5,9 @@ mod lua_member_owner;
 mod lua_owner_members;
 
 use std::collections::{HashMap, HashSet};
-
+use smol_str::SmolStr;
 use super::traits::LuaIndex;
-use crate::{FileId, db_index::member::lua_owner_members::LuaOwnerMembers};
+use crate::{FileId, db_index::member::lua_owner_members::LuaOwnerMembers, DbIndex, LuaTypeDeclId, LuaType, InferGuard};
 pub use lua_member::{LuaMember, LuaMemberId, LuaMemberKey};
 pub use lua_member_feature::LuaMemberFeature;
 pub use lua_member_item::LuaMemberIndexItem;
@@ -221,6 +221,91 @@ impl LuaMemberIndex {
 
     pub fn get_current_owner(&self, id: &LuaMemberId) -> Option<&LuaMemberOwner> {
         self.member_current_owner.get(id)
+    }
+
+    // 查询ctor函数成员
+    pub fn get_constructor_call_func(
+        &self,
+        db: &DbIndex,
+        prefix_type_id: &LuaTypeDeclId,
+    ) -> Option<&LuaMemberIndexItem> {
+        // 准备搜索"ctor"成员
+        let ctor_key = LuaMemberKey::Name(SmolStr::new("ctor"));
+        let current_owner = LuaMemberOwner::Type(prefix_type_id.clone());
+        let type_index = db.get_type_index();
+
+        // 使用广度优先搜索遍历类继承层次
+        let mut visited = HashSet::new();
+        let mut owners_to_check = vec![current_owner];
+
+        while let Some(owner) = owners_to_check.pop() {
+            if !visited.insert(owner.clone()) {
+                continue;
+            }
+
+            // 检查当前类是否有ctor成员
+            if let Some(member_item) = self.get_member_item(&owner, &ctor_key) {
+                // 检查成员是否是函数类型
+                if let Ok(typ) = member_item.resolve_type(db) {
+                    match typ {
+                        LuaType::Signature(_) | LuaType::DocFunction(_) => {
+                            return Some(member_item);
+                        },
+                        _ => {}
+                    }
+                }
+            }
+
+            // 将父类添加到待检查列表
+            if let LuaMemberOwner::Type(type_id) = &owner {
+                if let Some(super_types) = type_index.get_super_types(type_id) {
+                    for super_type in super_types {
+                        if let LuaType::Ref(super_id) | LuaType::Def(super_id) = super_type {
+                            owners_to_check.push(LuaMemberOwner::Type(super_id.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    // LuaBehavior 将args中的值映射到自身
+    pub fn get_member_lua_behavior(
+        &self,
+        db: &DbIndex,
+        prefix_type_id: &LuaTypeDeclId,
+        member_key: &LuaMemberKey,
+    ) -> Option<&LuaMemberIndexItem> {
+        // 只处理以下划线开头的成员名
+        let name_str = member_key.get_name()?;
+        if !name_str.starts_with('_') {
+            return None;
+        }
+
+        // 检查类型是否有 LuaBehavior 特性
+        let type_index = db.get_type_index();
+        let is_lua_behavior = type_index
+            .get_type_decl(prefix_type_id)
+            .map_or(false, |decl| decl.is_lua_behavior(db, &mut InferGuard::new()));
+
+        if !is_lua_behavior {
+            return None;
+        }
+
+        // 处理args字段
+        let owner = LuaMemberOwner::Type(prefix_type_id.clone());
+        let args_member = self.get_member_item(&owner, &LuaMemberKey::Name(SmolStr::new("args")))?;
+
+        // 解析 args 类型并查找对应的字段
+        if let Ok(LuaType::TableConst(table_id)) = args_member.resolve_type(db) {
+            let field_name = name_str.strip_prefix('_')?;
+            let table_owner = LuaMemberOwner::Element(table_id);
+            self.get_member_item(&table_owner, &LuaMemberKey::Name(SmolStr::new(field_name)))
+        } else {
+            None
+        }
     }
 }
 

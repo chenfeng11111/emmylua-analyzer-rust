@@ -20,7 +20,7 @@ pub use function_provider::get_function_remove_nil;
 use rowan::TextRange;
 
 pub fn add_completions(builder: &mut CompletionBuilder, emmyrc: &Emmyrc) -> Option<()> {
-    postfix_provider::add_completion(builder);
+    // postfix_provider::add_completion(builder);
     // `function_provider`优先级必须高于`env_provider`
     function_provider::add_completion(builder);
     equality_comparison_provider::add_completion(builder);
@@ -37,6 +37,9 @@ pub fn add_completions(builder: &mut CompletionBuilder, emmyrc: &Emmyrc) -> Opti
     doc_type_provider::add_completion(builder);
     doc_name_token_provider::add_completion(builder);
 
+    // 优先级降低
+    postfix_provider::add_completion(builder);
+    
     for (index, item) in builder.get_completion_items_mut().iter_mut().enumerate() {
         if item.sort_text.is_none() {
             item.sort_text = Some(format!("{:04}", index + 32));

@@ -14,6 +14,7 @@ pub use find_index::find_index_operations;
 pub use find_members::{find_members, find_members_with_key};
 pub use get_member_map::get_member_map;
 pub use infer_raw_member::infer_raw_member_type;
+pub use get_member_map::get_lua_behavior_args_map;
 
 use super::{
     InferFailReason, LuaInferCache, SemanticDeclLevel, infer_node_semantic_decl,

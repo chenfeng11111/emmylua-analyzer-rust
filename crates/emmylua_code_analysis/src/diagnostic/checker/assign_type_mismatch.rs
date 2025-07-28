@@ -388,6 +388,8 @@ fn check_assign_type_mismatch(
                 return Some(false);
             }
         }
+        // number赋值给integer不报错
+        (LuaType::Integer | LuaType::DocIntegerConst(_) | LuaType::IntegerConst(_), LuaType::Number | LuaType::FloatConst(_)) => return Some(false),
         _ => {}
     }
 

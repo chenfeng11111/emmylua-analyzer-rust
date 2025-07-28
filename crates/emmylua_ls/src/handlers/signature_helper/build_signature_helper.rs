@@ -25,7 +25,7 @@ pub fn build_signature_helper(
     let colon_call = call_expr.is_colon_call();
     let current_idx = get_current_param_index(&call_expr, &token)?;
     let help = match prefix_expr_type {
-        LuaType::DocFunction(func_type) => {
+        LuaType::DocFunction(func_type) | LuaType::ConstructorFunction(func_type) => {
             build_doc_function_signature_help(&builder, &func_type, colon_call, current_idx)
         }
         LuaType::Signature(signature_id) => {

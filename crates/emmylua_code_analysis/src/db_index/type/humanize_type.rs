@@ -101,6 +101,10 @@ pub fn humanize_type(db: &DbIndex, ty: &LuaType, level: RenderLevel) -> String {
             let type_str = humanize_type(db, inner, level.next_level());
             format!("TypeGuard<{}>", type_str)
         }
+        LuaType::ConstructorFunction(lua_func) => {
+            let str = humanize_doc_function_type(db, lua_func, level);
+            format!("Constructor\n\n{}", str)
+        }
         _ => "unknown".to_string(),
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use emmylua_code_analysis::{InferGuard, LuaMemberInfo, LuaMemberKey, LuaType, get_real_type};
+use emmylua_code_analysis::{InferGuard, LuaMemberInfo, LuaMemberKey, LuaType, get_real_type, humanize_type, RenderLevel};
 use emmylua_parser::{LuaAst, LuaAstNode, LuaKind, LuaTableExpr, LuaTableField, LuaTokenKind};
 use lsp_types::{CompletionItem, InsertTextFormat, InsertTextMode};
 use rowan::NodeOrToken;
@@ -142,6 +142,7 @@ fn add_field_key_completion(
         None
     };
 
+    let description = humanize_type(builder.semantic_model.get_db(), &typ, RenderLevel::Brief);
     let completion_item = CompletionItem {
         label,
         kind: Some(lsp_types::CompletionItemKind::PROPERTY),
@@ -149,6 +150,10 @@ fn add_field_key_completion(
         deprecated,
         insert_text: Some(insert_text),
         insert_text_format,
+        label_details: Some(lsp_types::CompletionItemLabelDetails {
+            description: Some(description),
+            detail: None,
+        }),
         ..Default::default()
     };
 

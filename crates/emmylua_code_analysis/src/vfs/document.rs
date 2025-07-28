@@ -49,6 +49,10 @@ impl<'a> LuaDocument<'a> {
         self.text
     }
 
+    pub fn get_valid_range(&self) -> u32{
+        self.get_text().len() as u32
+    }
+
     pub fn get_text_slice(&self, range: TextRange) -> &str {
         &self.text[range.start().into()..range.end().into()]
     }

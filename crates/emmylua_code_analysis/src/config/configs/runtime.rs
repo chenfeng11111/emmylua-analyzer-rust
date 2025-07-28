@@ -23,6 +23,8 @@ pub struct EmmyrcRuntime {
     #[serde(default)]
     /// class default overload function.
     pub class_default_call: ClassDefaultCall,
+    /// constructor function
+    pub constructor: Vec<String>,
 }
 
 impl Default for EmmyrcRuntime {
@@ -34,6 +36,7 @@ impl Default for EmmyrcRuntime {
             extensions: Default::default(),
             require_pattern: Default::default(),
             class_default_call: Default::default(),
+            constructor: Default::default(),
         }
     }
 }

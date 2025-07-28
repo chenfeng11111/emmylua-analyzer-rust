@@ -4,9 +4,7 @@ use rowan::TextRange;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smol_str::SmolStr;
 
-use crate::{
-    DbIndex, FileId, LuaMemberKey, LuaMemberOwner, TypeSubstitutor, instantiate_type_generic,
-};
+use crate::{DbIndex, FileId, LuaMemberKey, LuaMemberOwner, TypeSubstitutor, instantiate_type_generic, InferGuard};
 
 use super::{LuaType, LuaUnionType};
 
@@ -83,6 +81,30 @@ impl LuaTypeDecl {
 
     pub fn is_alias(&self) -> bool {
         matches!(self.extra, LuaTypeExtra::Alias { .. })
+    }
+
+    pub fn is_lua_behavior(&self, db: &DbIndex, infer_guard: &mut InferGuard) -> bool {
+        let check = infer_guard.check(&self.id);
+        match check {
+            Ok(_) => {}
+            Err(_) => {
+                return false;
+            }
+        }
+        if self.get_name() == "BaseLuaBehavior" {
+            return true;
+        }
+
+        let type_index = db.get_type_index();
+        if let Some(super_types) = type_index.get_super_types(&self.id) {
+            super_types.iter().any(|t| {
+                matches!(t, LuaType::Ref(id) if type_index
+                .get_type_decl(id)
+                .map_or(false, |decl| decl.is_lua_behavior(db, infer_guard)))
+            })
+        } else {
+            false
+        }
     }
 
     pub fn is_exact(&self) -> bool {

@@ -29,6 +29,9 @@ pub struct EmmyrcCompletion {
     /// The postfix trigger used in completions.
     #[serde(default = "default_postfix")]
     pub postfix: String,
+    /// function completion need "()"
+    #[serde(default = "default_false")]
+    pub function_completion_need_parentheses: bool,
     /// Whether to include the name in the base function completion. effect: `function () end` -> `function name() end`.
     #[serde(default = "default_true")]
     pub base_function_includes_name: bool,
@@ -44,6 +47,7 @@ impl Default for EmmyrcCompletion {
             call_snippet: false,
             auto_require_separator: default_auto_require_separator(),
             postfix: default_postfix(),
+            function_completion_need_parentheses: default_false(),
             base_function_includes_name: default_true(),
         }
     }
@@ -51,6 +55,9 @@ impl Default for EmmyrcCompletion {
 
 fn default_true() -> bool {
     true
+}
+fn default_false() -> bool {
+    false
 }
 
 fn default_require_function() -> String {

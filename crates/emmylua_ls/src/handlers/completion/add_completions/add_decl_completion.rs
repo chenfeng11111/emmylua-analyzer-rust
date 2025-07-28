@@ -1,13 +1,11 @@
 use emmylua_code_analysis::{DbIndex, LuaDeclId, LuaSemanticDeclId, LuaType};
-use lsp_types::CompletionItem;
+use lsp_types::{CompletionItem, InsertTextFormat};
 
 use crate::handlers::completion::{
     completion_builder::CompletionBuilder, completion_data::CompletionData,
 };
 
-use super::{
-    CallDisplay, check_visibility, get_completion_kind, get_description, get_detail, is_deprecated,
-};
+use super::{CallDisplay, check_visibility, get_completion_kind, get_description, get_detail, is_deprecated, get_function_insert_text};
 
 pub fn add_decl_completion(
     builder: &mut CompletionBuilder,
@@ -19,9 +17,21 @@ pub fn add_decl_completion(
     check_visibility(builder, property_owner.clone())?;
 
     let overload_count = count_function_overloads(builder.semantic_model.get_db(), typ);
+
+    let emmyrc = builder.semantic_model.get_emmyrc();
+    let insert_text = get_function_insert_text(
+        builder,
+        CallDisplay::None,
+        name,
+        emmyrc.completion.function_completion_need_parentheses,
+        typ,
+    );
+    
     let mut completion_item = CompletionItem {
         label: name.to_string(),
         kind: Some(get_completion_kind(&typ)),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        insert_text: Some(insert_text),
         data: CompletionData::from_property_owner_id(builder, decl_id.into(), overload_count),
         label_details: Some(lsp_types::CompletionItemLabelDetails {
             detail: get_detail(builder, &typ, CallDisplay::None),

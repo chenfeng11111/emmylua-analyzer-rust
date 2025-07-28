@@ -31,12 +31,12 @@ pub const KEYWORD_COMPLETIONS: &[KeywordCompletionInfo] = &[
         insert_text: "elseif ${1:condition} then\n\t${0}",
         kind: CompletionItemKind::SNIPPET,
     },
-    KeywordCompletionInfo {
-        label: "then",
-        detail: " (then .. )",
-        insert_text: "then\n\t${0}",
-        kind: CompletionItemKind::SNIPPET,
-    },
+    // KeywordCompletionInfo {
+    //     label: "then",
+    //     detail: " (then .. )",
+    //     insert_text: "then\n\t${0}",
+    //     kind: CompletionItemKind::SNIPPET,
+    // },
     KeywordCompletionInfo {
         label: "then",
         detail: " (then .. end)",

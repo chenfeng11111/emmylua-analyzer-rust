@@ -46,7 +46,13 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
     sorted_entries.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
     for (_, member_infos) in sorted_entries {
-        add_resolve_member_infos(builder, &member_infos, completion_status);
+        add_resolve_member_infos(builder, &member_infos, completion_status, None);
+    }
+
+    // 添加
+    let member_info_map = builder.semantic_model.get_lua_behavior_args_map(&prefix_type)?;
+    for (_, member_infos) in member_info_map.iter() {
+        add_resolve_member_infos(builder, &member_infos, completion_status, true.into());
     }
 
     Some(())
@@ -56,6 +62,7 @@ fn add_resolve_member_infos(
     builder: &mut CompletionBuilder,
     member_infos: &Vec<LuaMemberInfo>,
     completion_status: CompletionTriggerStatus,
+    is_lua_behavior_args: Option<bool>,
 ) -> Option<()> {
     if member_infos.len() == 1 {
         let member_info = &member_infos[0];
@@ -81,6 +88,7 @@ fn add_resolve_member_infos(
             member_info.clone(),
             completion_status,
             overload_count,
+            is_lua_behavior_args
         );
         return Some(());
     }
@@ -98,6 +106,7 @@ fn add_resolve_member_infos(
                     member_info.clone(),
                     completion_status,
                     overload_count,
+                    is_lua_behavior_args
                 );
             }
             MemberResolveState::Meta => {
@@ -108,6 +117,7 @@ fn add_resolve_member_infos(
                             member_info.clone(),
                             completion_status,
                             overload_count,
+                            is_lua_behavior_args
                         );
                     }
                 }
@@ -120,6 +130,7 @@ fn add_resolve_member_infos(
                             member_info.clone(),
                             completion_status,
                             overload_count,
+                            is_lua_behavior_args
                         );
                     }
                 }

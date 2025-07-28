@@ -28,7 +28,14 @@ pub async fn on_code_lens_handler(
         return None;
     }
 
-    build_code_lens(&mut semantic_model)
+    let client_id = context
+        .workspace_manager
+        .read()
+        .await
+        .client_config
+        .client_id;
+
+    build_code_lens(&mut semantic_model, client_id)
 }
 
 pub async fn on_resolve_code_lens_handler(
@@ -52,6 +59,7 @@ pub async fn on_resolve_code_lens_handler(
 pub enum CodeLensData {
     Member(LuaMemberId),
     DeclId(LuaDeclId),
+    Override(LuaMemberId), // 添加新的变体用于标识重写方法
 }
 
 pub struct CodeLensCapabilities;

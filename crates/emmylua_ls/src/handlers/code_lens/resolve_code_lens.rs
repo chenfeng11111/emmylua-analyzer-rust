@@ -54,6 +54,36 @@ pub fn resolve_code_lens(
                 data: None,
             })
         }
+        CodeLensData::Override(member_id) => {
+            // 获取父类方法的位置信息
+            let file_id = member_id.file_id;
+            let semantic_model = compilation.get_semantic_model(file_id)?;
+
+            // 获取成员信息
+            let member = compilation.get_db().get_member_index().get_member(&member_id)?;
+
+            // 获取文档和位置
+            let document = semantic_model.get_document_by_file_id(file_id)?;
+            let range = member.get_range();
+            let location = document.to_lsp_location(range)?;
+
+            // 简单实现一个自定义命令
+            let command = Command {
+                title: "override".to_string(),
+                command: get_command_name(client_id).to_string(),
+                arguments: Some(vec![
+                    serde_json::to_value(location.uri.to_string()).unwrap(),
+                    serde_json::to_value(location.range.start).unwrap(),
+                    serde_json::to_value(vec![location]).unwrap(),
+                ]),
+            };
+
+            Some(CodeLens {
+                range: code_lens.range,
+                command: Some(command),
+                data: None,
+            })
+        }
     }
 }
 

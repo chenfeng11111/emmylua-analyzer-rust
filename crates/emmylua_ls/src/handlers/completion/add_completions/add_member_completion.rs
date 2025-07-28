@@ -1,21 +1,18 @@
+use crate::handlers::completion::{
+    completion_builder::CompletionBuilder, completion_data::CompletionData,
+    providers::get_function_remove_nil,
+};
 use emmylua_code_analysis::{
-    DbIndex, LuaMemberInfo, LuaMemberKey, LuaSemanticDeclId, LuaType, SemanticModel,
-    try_extract_signature_id_from_field,
+    try_extract_signature_id_from_field, DbIndex, LuaMemberInfo, LuaMemberKey, LuaSemanticDeclId, LuaType,
+    SemanticModel,
 };
 use emmylua_parser::{
     LuaAssignStat, LuaAstNode, LuaAstToken, LuaFuncStat, LuaGeneralToken, LuaIndexExpr,
     LuaParenExpr, LuaTokenKind,
 };
-use lsp_types::CompletionItem;
+use lsp_types::{CompletionItem, InsertTextFormat};
 
-use crate::handlers::completion::{
-    completion_builder::CompletionBuilder, completion_data::CompletionData,
-    providers::get_function_remove_nil,
-};
-
-use super::{
-    CallDisplay, check_visibility, get_completion_kind, get_description, get_detail, is_deprecated,
-};
+use super::{check_visibility, get_completion_kind, get_description, get_detail, get_function_insert_text, is_deprecated, CallDisplay};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompletionTriggerStatus {
@@ -30,6 +27,7 @@ pub fn add_member_completion(
     member_info: LuaMemberInfo,
     status: CompletionTriggerStatus,
     overload_count: Option<usize>,
+    is_lua_behavior_args: Option<bool>
 ) -> Option<()> {
     if builder.is_cancelled() {
         return None;
@@ -82,7 +80,15 @@ pub fn add_member_completion(
     let call_display = get_call_show(builder.semantic_model.get_db(), &remove_nil_type, status)
         .unwrap_or(CallDisplay::None);
     // 紧靠着 label 显示的描述
-    let detail = get_detail(builder, &remove_nil_type, call_display);
+    let mut detail = get_detail(builder, &typ, call_display);
+
+    if is_lua_behavior_args.unwrap_or(false) {
+        detail = if detail.is_some() {
+            Some(format!("{} ~~ behavior args", detail.unwrap()))
+        } else {
+            Some(" ~~ behavior args".to_string())
+        }
+    }
     // 在`detail`更右侧, 且不紧靠着`detail`显示
     let description = get_description(builder, &remove_nil_type);
 
@@ -91,10 +97,22 @@ pub fn add_member_completion(
     } else {
         None
     };
+    
+    let completion_kind = get_completion_kind(&typ);
+    let emmyrc = builder.semantic_model.get_emmyrc();
+    let insert_text = get_function_insert_text(
+        builder,
+        call_display,
+        &label,
+        emmyrc.completion.function_completion_need_parentheses && matches!(status, CompletionTriggerStatus::Dot|CompletionTriggerStatus::Colon),
+        &typ,
+    );
 
     let mut completion_item = CompletionItem {
         label: label.clone(),
-        kind: Some(get_completion_kind(&remove_nil_type)),
+        kind: Some(completion_kind),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        insert_text: Some(insert_text),
         data: completion_data,
         label_details: Some(lsp_types::CompletionItemLabelDetails {
             detail,
@@ -186,9 +204,21 @@ fn add_signature_overloads(
             } else {
                 None
             };
+            let completion_kind = get_completion_kind(&typ);
+            let emmyrc = builder.semantic_model.get_emmyrc();
+            let insert_text = get_function_insert_text(
+                builder,
+                call_display,
+                &label,
+                emmyrc.completion.function_completion_need_parentheses, // overload一定是函数
+                &typ,
+            );
+
             let completion_item = CompletionItem {
                 label: label.clone(),
-                kind: Some(get_completion_kind(&typ)),
+                kind: Some(completion_kind),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                insert_text: Some(insert_text),
                 data,
                 label_details: Some(lsp_types::CompletionItemLabelDetails {
                     detail,

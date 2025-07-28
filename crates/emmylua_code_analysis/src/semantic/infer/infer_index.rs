@@ -8,28 +8,22 @@ use internment::ArcIntern;
 use rowan::TextRange;
 use smol_str::SmolStr;
 
-use crate::{
-    CacheEntry, InFiled, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId, LuaInferCache,
-    LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps,
-    db_index::{
-        DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
-        LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
+use crate::{db_index::{
+    DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
+    LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
+}, enum_variable_is_param, semantic::{
+    generic::{instantiate_type_generic, TypeSubstitutor},
+    infer::{
+        infer_name::get_name_expr_var_ref_id,
+        narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
+        VarRefId,
     },
-    enum_variable_is_param,
-    semantic::{
-        InferGuard,
-        generic::{TypeSubstitutor, instantiate_type_generic},
-        infer::{
-            VarRefId,
-            infer_name::get_name_expr_var_ref_id,
-            narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
-        },
-        member::get_buildin_type_map_type_id,
-        type_check::{self, check_type_compact},
-    },
-};
+    member::get_buildin_type_map_type_id,
+    type_check::{self, check_type_compact},
+    InferGuard,
+}, CacheEntry, InFiled, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId, LuaFunctionType, LuaInferCache, LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps};
 
-use super::{InferFailReason, InferResult, infer_expr, infer_name::infer_global_type};
+use super::{infer_expr, infer_name::infer_global_type, InferFailReason, InferResult};
 
 pub fn infer_index_expr(
     db: &DbIndex,
@@ -389,6 +383,55 @@ fn infer_custom_type_member(
     }
 
     if type_decl.is_class() {
+        let name_str = key.get_name();
+        if let Some(name_str) = name_str {
+            if db.get_emmyrc().runtime.constructor.contains(&String::from(name_str)) {
+                // 构造函数
+                let mut params = Vec::new();
+
+                if let Some(member_item) = db.get_member_index().get_constructor_call_func(db, &prefix_type_id) {
+                    if let Ok(typ) = member_item.resolve_type(db) {
+                        match typ {
+                            LuaType::Signature(signature_id) => {
+                                if let Some(sig) = db.get_signature_index().get(&signature_id) {
+                                    params = sig.get_type_params();
+                                }
+                            },
+                            LuaType::DocFunction(func) => {
+                                params = func.get_params().to_vec();
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+
+                return Ok(LuaType::ConstructorFunction(LuaFunctionType::new(
+                    false,
+                    false,
+                    params,
+                    LuaType::SelfInfer
+                ).into()));
+            }
+        }
+
+
+        let name = key.get_name();
+        if let Some(name_str) = name {
+            // super父类
+            if name_str == "super" {
+                if let Some(super_types) = type_index.get_super_types(&prefix_type_id) {
+                    if !super_types.is_empty() {
+                        return Ok(LuaType::Union(LuaUnionType::Multi(super_types).into()));
+                    }
+                }
+            }
+        }
+        
+        if let Some(member_item) = db.get_member_index().get_member_lua_behavior(db, &prefix_type_id, &key) {
+            // lua behavior args成员
+            return member_item.resolve_type(db);
+        }
+
         if let Some(super_types) = type_index.get_super_types(&prefix_type_id) {
             for super_type in super_types {
                 let result = infer_member_by_member_key(

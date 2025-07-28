@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-
-use crate::{DbIndex, LuaMemberKey, LuaType};
+use smol_str::SmolStr;
+use crate::{DbIndex, InferGuard, LuaMemberKey, LuaMemberOwner, LuaType};
 
 use super::{
     LuaMemberInfo,
@@ -39,6 +39,60 @@ pub fn get_member_map(
         }
         member_map.entry(key).or_insert_with(Vec::new).push(member);
     }
+
+    Some(member_map)
+}
+
+pub fn get_lua_behavior_args_map(
+    db: &DbIndex,
+    prefix_type: &LuaType,
+) -> Option<HashMap<LuaMemberKey, Vec<LuaMemberInfo>>> {
+    // 只处理 Def 或 Ref 类型
+    let type_decl_id = match prefix_type {
+        LuaType::Def(id) | LuaType::Ref(id) => id,
+        _ => return None,
+    };
+
+    // 获取类型声明并检查是否为 lua_behavior
+    let type_index = db.get_type_index();
+    let type_decl = type_index.get_type_decl(type_decl_id)?;
+    if !type_decl.is_lua_behavior(db, &mut InferGuard::new()) {
+        return None;
+    }
+
+    // 获取 args 成员
+    let owner = LuaMemberOwner::Type(type_decl_id.clone());
+    let args_key = LuaMemberKey::Name(SmolStr::new("args"));
+    let args_member = db.get_member_index().get_member_item(&owner, &args_key)?;
+
+    // 解析 args 类型
+    let args_type = args_member.resolve_type(db).ok()?;
+
+    // 查找所有成员并转换为需要的格式
+    let members = find_members::find_members(db, &args_type)?;
+
+    // 构建成员映射
+    let member_map = members.into_iter().map(|member| {
+        // 重命名 key
+        let new_key = match &member.key {
+            LuaMemberKey::Name(name) => LuaMemberKey::Name(SmolStr::new(format!("_{}", name))),
+            _ => member.key.clone(),
+        };
+
+        // 创建新的成员信息
+        LuaMemberInfo {
+            key: new_key.clone(),
+            typ: member.typ,
+            property_owner_id: member.property_owner_id,
+            feature: member.feature,
+            overload_index: member.overload_index,
+        }
+    }).fold(HashMap::new(), |mut map, member| {
+        map.entry(member.key.clone())
+            .or_insert_with(Vec::new)
+            .push(member);
+        map
+    });
 
     Some(member_map)
 }
