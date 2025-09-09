@@ -60,21 +60,19 @@ pub fn build_assign_stat_symbol(
 ) -> Option<()> {
     let file_id = builder.get_file_id();
     let (vars, _) = assign_stat.get_var_and_expr_list();
-    let simple_var = vars.len() == 1;
     for var in vars {
         let decl_id = LuaDeclId::new(file_id, var.get_position());
-        let decl = match builder.get_decl(&decl_id) {
-            Some(decl) => decl,
-            None => continue,
+        let is_global = match builder.get_decl(&decl_id) {
+            Some(_) => true,
+            None => false,
         };
-        let range = if simple_var {
-            assign_stat.get_range()
+        let range = assign_stat.get_range();
+        let name = if is_global {
+            format!("global {}", var.syntax().to_string())
         } else {
-            decl.get_range()
+            format!("{}", var.syntax().to_string())
         };
-        let typ = builder.get_type(decl_id.into());
-        let desc = builder.get_symbol_kind_and_detail(Some(&typ));
-        let symbol = LuaSymbol::new(format!("global {}", decl.get_name().to_string()), desc.1, desc.0, range);
+        let symbol = LuaSymbol::new(name, None, SymbolKind::VARIABLE, range);
 
         builder.add_node_symbol(var.syntax().clone(), symbol);
     }

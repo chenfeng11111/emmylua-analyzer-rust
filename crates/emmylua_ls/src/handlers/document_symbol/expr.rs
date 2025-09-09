@@ -44,16 +44,15 @@ pub fn build_closure_expr_symbol(
 }
 
 pub fn build_table_symbol(builder: &mut DocumentSymbolBuilder, table: LuaTableExpr) -> Option<()> {
-    let symbol = LuaSymbol::new(
-        "table".to_string(),
-        None,
-        SymbolKind::STRUCT,
-        table.get_range(),
-    );
-
-    builder.add_node_symbol(table.syntax().clone(), symbol);
-
     if table.is_object() {
+        let symbol = LuaSymbol::new(
+            "table".to_string(),
+            None,
+            SymbolKind::STRUCT,
+            table.get_range(),
+        );
+
+        builder.add_node_symbol(table.syntax().clone(), symbol);
         for field in table.get_fields() {
             let key = field.get_field_key()?;
             let str_key = match key {
