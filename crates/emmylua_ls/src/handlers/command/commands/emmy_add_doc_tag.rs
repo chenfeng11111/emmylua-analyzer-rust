@@ -1,6 +1,6 @@
-use std::{fs::OpenOptions, io::Write, sync::Arc};
+use std::{fs::OpenOptions, io::Write};
 
-use emmylua_code_analysis::load_configs;
+use emmylua_code_analysis::load_configs_raw;
 use lsp_types::Command;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -16,7 +16,7 @@ impl CommandSpec for AddDocTagCommand {
 
     async fn handle(context: ServerContextSnapshot, args: Vec<Value>) -> Option<()> {
         let tag_name: String = serde_json::from_value(args.get(0)?.clone()).ok()?;
-        add_doc_tag(context.workspace_manager, tag_name).await;
+        add_doc_tag(context.workspace_manager(), tag_name).await;
         Some(())
     }
 }
@@ -31,16 +31,22 @@ pub fn make_auto_doc_tag_command(title: &str, tag_name: &str) -> Command {
     }
 }
 
-async fn add_doc_tag(
-    config_manager: Arc<RwLock<WorkspaceManager>>,
-    tag_name: String,
-) -> Option<()> {
-    let config_manager = config_manager.read().await;
-    let main_workspace = config_manager.workspace_folders.get(0)?;
+async fn add_doc_tag(workspace_manager: &RwLock<WorkspaceManager>, tag_name: String) -> Option<()> {
+    let workspace_manager = workspace_manager.read().await;
+    let main_workspace = workspace_manager.workspace_folders.get(0)?;
     let emmyrc_path = main_workspace.join(".emmyrc.json");
-    let mut emmyrc = load_configs(vec![emmyrc_path.clone()], None);
-    emmyrc.doc.known_tags.push(tag_name);
-    drop(config_manager);
+    let mut emmyrc = load_configs_raw(vec![emmyrc_path.clone()], None);
+    drop(workspace_manager);
+
+    emmyrc
+        .as_object_mut()?
+        .entry("doc")
+        .or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut()?
+        .entry("knownTags")
+        .or_insert_with(|| Value::Array(Default::default()))
+        .as_array_mut()?
+        .push(Value::String(tag_name));
 
     let emmyrc_json = serde_json::to_string_pretty(&emmyrc).ok()?;
     if let Ok(mut file) = OpenOptions::new()

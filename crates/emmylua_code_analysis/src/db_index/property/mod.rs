@@ -6,9 +6,7 @@ use emmylua_parser::{LuaAstNode, LuaDocTagField, LuaDocType, LuaVersionCondition
 pub use property::LuaCommonProperty;
 pub use property::{LuaDeprecated, LuaExport, LuaExportScope, LuaPropertyId};
 
-use crate::{
-    DbIndex, FileId, LuaMember, LuaSignatureId, db_index::property::property::LuaTagContent,
-};
+use crate::{DbIndex, FileId, LuaMember, LuaSignatureId};
 
 use super::{LuaSemanticDeclId, traits::LuaIndex};
 
@@ -34,16 +32,17 @@ impl LuaPropertyIndex {
     fn get_or_create_property(
         &mut self,
         owner_id: LuaSemanticDeclId,
-    ) -> Option<&mut LuaCommonProperty> {
+    ) -> Option<(&mut LuaCommonProperty, LuaPropertyId)> {
         if let Some(property_id) = self.property_owners_map.get(&owner_id) {
-            self.properties.get_mut(property_id)
+            self.properties
+                .get_mut(property_id)
+                .map(|prop| (prop, *property_id))
         } else {
             let id = LuaPropertyId::new(self.id_count);
             self.id_count += 1;
             self.property_owners_map.insert(owner_id.clone(), id);
-            self.properties
-                .insert(id, LuaCommonProperty::new(id.clone()));
-            self.properties.get_mut(&id)
+            self.properties.insert(id, LuaCommonProperty::new());
+            self.properties.get_mut(&id).map(|prop| (prop, id))
         }
     }
 
@@ -53,12 +52,9 @@ impl LuaPropertyIndex {
         same_property_owner_id: LuaSemanticDeclId,
         file_id: FileId,
     ) -> Option<()> {
-        let property_id = self
-            .get_or_create_property(source_owner_id.clone())?
-            .id
-            .clone();
+        let (_, property_id) = self.get_or_create_property(source_owner_id.clone())?;
         self.property_owners_map
-            .insert(same_property_owner_id, property_id);
+            .insert(same_property_owner_id, property_id.clone());
 
         self.in_filed_owner
             .entry(file_id)
@@ -74,8 +70,8 @@ impl LuaPropertyIndex {
         owner_id: LuaSemanticDeclId,
         description: String,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        property.description = Some(Box::new(description));
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
+        property.add_extra_description(description);
 
         self.in_filed_owner
             .entry(file_id)
@@ -91,8 +87,8 @@ impl LuaPropertyIndex {
         owner_id: LuaSemanticDeclId,
         visibility: VisibilityKind,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        property.visibility = Some(visibility);
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
+        property.visibility = visibility;
 
         self.in_filed_owner
             .entry(file_id)
@@ -108,8 +104,8 @@ impl LuaPropertyIndex {
         owner_id: LuaSemanticDeclId,
         source: String,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        property.source = Some(Box::new(source));
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
+        property.add_extra_source(source);
 
         self.in_filed_owner
             .entry(file_id)
@@ -125,11 +121,8 @@ impl LuaPropertyIndex {
         owner_id: LuaSemanticDeclId,
         message: Option<String>,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        property.deprecated = match message {
-            Some(msg) => Some(LuaDeprecated::DeprecatedWithMessage(Box::new(msg))),
-            None => Some(LuaDeprecated::Deprecated),
-        };
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
+        property.add_extra_deprecated(message);
 
         self.in_filed_owner
             .entry(file_id)
@@ -145,8 +138,8 @@ impl LuaPropertyIndex {
         owner_id: LuaSemanticDeclId,
         version_conds: Vec<LuaVersionCondition>,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        property.version_conds = Some(Box::new(version_conds));
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
+        property.add_extra_version_cond(version_conds);
 
         self.in_filed_owner
             .entry(file_id)
@@ -160,14 +153,17 @@ impl LuaPropertyIndex {
         &mut self,
         file_id: FileId,
         owner_id: LuaSemanticDeclId,
-        see_content: String,
+        mut see_content: String,
+        see_description: Option<String>,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        let tag_content = property
-            .tag_content
-            .get_or_insert_with(|| Box::new(LuaTagContent::new()));
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
 
-        tag_content.add_tag("see".into(), see_content);
+        if let Some(see_description) = see_description {
+            see_content += " ";
+            see_content += &see_description;
+        }
+
+        property.add_extra_tag("see".into(), see_content);
 
         self.in_filed_owner
             .entry(file_id)
@@ -184,11 +180,8 @@ impl LuaPropertyIndex {
         tag_name: String,
         other_content: String,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        let tag_content = property
-            .tag_content
-            .get_or_insert_with(|| Box::new(LuaTagContent::new()));
-        tag_content.add_tag(tag_name, other_content);
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
+        property.add_extra_tag(tag_name, other_content);
 
         self.in_filed_owner
             .entry(file_id)
@@ -204,10 +197,8 @@ impl LuaPropertyIndex {
         owner_id: LuaSemanticDeclId,
         export: property::LuaExport,
     ) -> Option<()> {
-        let property = self.get_or_create_property(owner_id.clone())?;
-        property.export = Some(LuaExport {
-            scope: export.scope,
-        });
+        let (property, _) = self.get_or_create_property(owner_id.clone())?;
+        property.add_extra_export(export);
 
         self.in_filed_owner
             .entry(file_id)

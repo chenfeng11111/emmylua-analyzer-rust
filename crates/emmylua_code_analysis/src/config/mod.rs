@@ -7,16 +7,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use config_loader::load_configs;
-pub use configs::EmmyrcFilenameConvention;
-pub use configs::EmmyrcLuaVersion;
-use configs::{EmmyrcCodeAction, EmmyrcDocumentColor};
+pub use crate::config::configs::{EmmyrcExternalTool, EmmyrcReformat};
+pub use config_loader::{load_configs, load_configs_raw};
+pub use configs::{DocSyntax, EmmyrcFilenameConvention, EmmyrcLuaVersion};
 use configs::{
-    EmmyrcCodeLen, EmmyrcCompletion, EmmyrcDiagnostic, EmmyrcDoc, EmmyrcHover, EmmyrcInlayHint,
-    EmmyrcInlineValues, EmmyrcReference, EmmyrcResource, EmmyrcRuntime, EmmyrcSemanticToken,
-    EmmyrcSignature, EmmyrcStrict, EmmyrcWorkspace,
+    EmmyrcCodeAction, EmmyrcCodeLens, EmmyrcCompletion, EmmyrcDiagnostic, EmmyrcDoc,
+    EmmyrcDocumentColor, EmmyrcHover, EmmyrcInlayHint, EmmyrcInlineValues, EmmyrcReference,
+    EmmyrcResource, EmmyrcRuntime, EmmyrcSemanticToken, EmmyrcSignature, EmmyrcStrict,
+    EmmyrcWorkspace,
 };
-use emmylua_parser::{LuaLanguageLevel, ParserConfig, SpecialFunction};
+use emmylua_parser::{LuaLanguageLevel, LuaNonStdSymbolSet, ParserConfig, SpecialFunction};
 use regex::Regex;
 use rowan::NodeCache;
 use schemars::JsonSchema;
@@ -43,7 +43,7 @@ pub struct Emmyrc {
     #[serde(default)]
     pub resource: EmmyrcResource,
     #[serde(default)]
-    pub code_lens: EmmyrcCodeLen,
+    pub code_lens: EmmyrcCodeLens,
     #[serde(default)]
     pub strict: EmmyrcStrict,
     #[serde(default)]
@@ -60,6 +60,8 @@ pub struct Emmyrc {
     pub inline_values: EmmyrcInlineValues,
     #[serde(default)]
     pub doc: EmmyrcDoc,
+    #[serde(default)]
+    pub format: EmmyrcReformat,
 }
 
 impl Emmyrc {
@@ -69,10 +71,25 @@ impl Emmyrc {
     ) -> ParserConfig<'cache> {
         let lua_language_level = self.get_language_level();
         let mut special_like = HashMap::new();
+        for (name, func) in self.runtime.special.iter() {
+            if let Some(func) = func.clone().into() {
+                special_like.insert(name.clone(), func);
+            }
+        }
         for name in self.runtime.require_like_function.iter() {
             special_like.insert(name.clone(), SpecialFunction::Require);
         }
-        ParserConfig::new(lua_language_level, Some(node_cache), special_like)
+        let mut non_std_symbols = LuaNonStdSymbolSet::new();
+        for symbol in self.runtime.nonstandard_symbol.iter() {
+            non_std_symbols.add(symbol.clone().into());
+        }
+
+        ParserConfig::new(
+            lua_language_level,
+            Some(node_cache),
+            special_like,
+            non_std_symbols,
+        )
     }
 
     pub fn get_language_level(&self) -> LuaLanguageLevel {

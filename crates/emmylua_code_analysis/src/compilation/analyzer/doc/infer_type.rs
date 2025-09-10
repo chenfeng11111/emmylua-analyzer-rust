@@ -10,7 +10,7 @@ use rowan::TextRange;
 use smol_str::SmolStr;
 
 use crate::{
-    DiagnosticCode, GenericTpl, InFiled, LuaAliasCallKind, LuaArrayLen, LuaArrayType,
+    AsyncState, DiagnosticCode, GenericTpl, InFiled, LuaAliasCallKind, LuaArrayLen, LuaArrayType,
     LuaMultiLineUnion, LuaTupleStatus, LuaTypeDeclId, TypeOps, VariadicType,
     db_index::{
         AnalyzeError, LuaAliasCallType, LuaFunctionType, LuaGenericType, LuaIndexAccessKey,
@@ -142,10 +142,12 @@ fn infer_buildin_or_ref_type(
             LuaType::Table
         }
         _ => {
-            if let Some(tpl_id) = analyzer.generic_index.find_generic(position, name) {
+            if let Some((tpl_id, is_variadic)) = analyzer.generic_index.find_generic(position, name)
+            {
                 return LuaType::TplRef(Arc::new(GenericTpl::new(
                     tpl_id,
                     SmolStr::new(name).into(),
+                    is_variadic,
                 )));
             }
 
@@ -317,6 +319,13 @@ fn infer_special_generic_type(
                 return Some(LuaType::ConstTplRef(tpl));
             }
         }
+        "Language" => {
+            let first_doc_param_type = generic_type.get_generic_types()?.get_types().next()?;
+            let first_param = infer_type(analyzer, first_doc_param_type);
+            if let LuaType::DocStringConst(lang_str) = first_param {
+                return Some(LuaType::Language(lang_str));
+            }
+        }
         _ => {}
     }
 
@@ -478,7 +487,13 @@ fn infer_func_type(analyzer: &mut DocAnalyzer, func: &LuaDocFuncType) -> LuaType
         }
     }
 
-    let is_async = func.is_async();
+    let async_state = if func.is_async() {
+        AsyncState::Async
+    } else if func.is_sync() {
+        AsyncState::Sync
+    } else {
+        AsyncState::None
+    };
 
     let mut is_colon = false;
     if let Some(parent) = func.get_parent::<LuaAst>() {
@@ -506,7 +521,7 @@ fn infer_func_type(analyzer: &mut DocAnalyzer, func: &LuaDocFuncType) -> LuaType
     };
 
     LuaType::DocFunction(
-        LuaFunctionType::new(is_async, is_colon, params_result, return_type).into(),
+        LuaFunctionType::new(async_state, is_colon, params_result, return_type).into(),
     )
 }
 

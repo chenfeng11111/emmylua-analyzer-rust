@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use super::{ClientProxy, FileDiagnostic, StatusBar};
@@ -15,6 +16,7 @@ use wax::Pattern;
 
 pub struct WorkspaceManager {
     analysis: Arc<RwLock<EmmyLuaAnalysis>>,
+    #[allow(unused)]
     client: Arc<ClientProxy>,
     status_bar: Arc<StatusBar>,
     update_token: Arc<Mutex<Option<Arc<ReindexToken>>>>,
@@ -24,6 +26,8 @@ pub struct WorkspaceManager {
     pub watcher: Option<notify::RecommendedWatcher>,
     pub current_open_files: HashSet<Uri>,
     pub match_file_pattern: WorkspaceFileMatcher,
+    // 原子变量
+    pub workspace_initialized: Arc<AtomicBool>,
 }
 
 impl WorkspaceManager {
@@ -44,7 +48,18 @@ impl WorkspaceManager {
             watcher: None,
             current_open_files: HashSet::new(),
             match_file_pattern: WorkspaceFileMatcher::default(),
+            workspace_initialized: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn is_workspace_initialized(&self) -> bool {
+        self.workspace_initialized
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn set_workspace_initialized(&self) {
+        self.workspace_initialized
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub async fn add_update_emmyrc_task(&self, file_dir: PathBuf) {
@@ -59,7 +74,6 @@ impl WorkspaceManager {
         drop(update_token);
 
         let analysis = self.analysis.clone();
-        let client = self.client.clone();
         let workspace_folders = self.workspace_folders.clone();
         let config_update_token = self.update_token.clone();
         let client_config = self.client_config.clone();
@@ -74,13 +88,12 @@ impl WorkspaceManager {
 
             let emmyrc = load_emmy_config(Some(file_dir.clone()), client_config);
             init_analysis(
-                analysis,
-                client,
+                &analysis,
                 &status_bar,
+                &file_diagnostic,
                 workspace_folders,
                 emmyrc,
                 client_id,
-                file_diagnostic,
             )
             .await;
             // After completion, remove from HashMap
@@ -110,19 +123,17 @@ impl WorkspaceManager {
 
         let emmyrc = load_emmy_config(config_root, self.client_config.clone());
         let analysis = self.analysis.clone();
-        let client = self.client.clone();
         let workspace_folders = self.workspace_folders.clone();
         let status_bar = self.status_bar.clone();
         let client_id = self.client_config.client_id;
         let file_diagnostic = self.file_diagnostic.clone();
         init_analysis(
-            analysis,
-            client,
+            &analysis,
             &status_bar,
+            &file_diagnostic,
             workspace_folders,
             emmyrc,
             client_id,
-            file_diagnostic,
         )
         .await;
 
@@ -139,6 +150,7 @@ impl WorkspaceManager {
     }
 
     pub async fn reindex_workspace(&self, delay: Duration) -> Option<()> {
+        log::info!("reindex workspace with delay: {:?}", delay);
         let mut update_token = self.update_token.lock().await;
         if let Some(token) = update_token.as_ref() {
             token.cancel();
@@ -274,6 +286,7 @@ pub fn load_emmy_config(config_root: Option<PathBuf>, client_config: ClientConfi
         emmyrc.pre_process_emmyrc(workspace_root);
     }
 
+    log::info!("loaded emmyrc complete");
     emmyrc.into()
 }
 

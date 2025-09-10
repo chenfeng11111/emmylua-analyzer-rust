@@ -182,6 +182,7 @@ fn parse_table_expr(p: &mut LuaParser) -> ParseResult {
         let mut lookahead_count = 0;
         const MAX_LOOKAHEAD: usize = 50; // 限制令牌数避免无休止的解析
 
+        let error_range = p.current_token_range();
         while p.current_token() != LuaTokenKind::TkEof && lookahead_count < MAX_LOOKAHEAD {
             match p.current_token() {
                 LuaTokenKind::TkRightBrace => {
@@ -217,7 +218,12 @@ fn parse_table_expr(p: &mut LuaParser) -> ParseResult {
             // 没有找到闭合括号, 报告错误
             p.push_error(LuaParseError::syntax_error_from(
                 &t!("expected '}' to close table"),
-                p.current_token_range(),
+                error_range,
+            ));
+        } else {
+            p.push_error(LuaParseError::syntax_error_from(
+                &t!("missing ',' or ';' after table field"),
+                error_range,
             ));
         }
     }
@@ -366,7 +372,7 @@ fn parse_name_or_special_function(p: &mut LuaParser) -> ParseResult {
         SpecialFunction::Assert => LuaSyntaxKind::AssertCallExpr,
         SpecialFunction::Error => LuaSyntaxKind::ErrorCallExpr,
         SpecialFunction::Type => LuaSyntaxKind::TypeCallExpr,
-        SpecialFunction::Setmatable => LuaSyntaxKind::SetmetatableCallExpr,
+        SpecialFunction::Setmetaatable => LuaSyntaxKind::SetmetatableCallExpr,
         _ => LuaSyntaxKind::None,
     };
     p.bump();

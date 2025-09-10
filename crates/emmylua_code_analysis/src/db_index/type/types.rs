@@ -10,7 +10,7 @@ use rowan::TextRange;
 use smol_str::SmolStr;
 
 use crate::{
-    DbIndex, InFiled, SemanticModel,
+    AsyncState, DbIndex, InFiled, SemanticModel,
     db_index::{LuaMemberKey, LuaSignatureId, r#type::type_visit_trait::TypeVisitTrait},
 };
 
@@ -62,6 +62,7 @@ pub enum LuaType {
     TypeGuard(Arc<LuaType>),
     ConstTplRef(Arc<GenericTpl>),
     ConstructorFunction(Arc<LuaFunctionType>),
+    Language(ArcIntern<SmolStr>),
 }
 
 impl PartialEq for LuaType {
@@ -111,6 +112,7 @@ impl PartialEq for LuaType {
             (LuaType::Never, LuaType::Never) => true,
             (LuaType::ConstructorFunction(a), LuaType::ConstructorFunction(b)) => a == b,
             (LuaType::ConstTplRef(a), LuaType::ConstTplRef(b)) => a == b,
+            (LuaType::Language(a), LuaType::Language(b)) => a == b,
             _ => false, // 不同变体之间不相等
         }
     }
@@ -189,6 +191,7 @@ impl Hash for LuaType {
             LuaType::Never => 45.hash(state),
             LuaType::ConstructorFunction(a) => (99, a).hash(state),
             LuaType::ConstTplRef(a) => (46, a).hash(state),
+            LuaType::Language(a) => (47, a).hash(state),
         }
     }
 }
@@ -237,7 +240,10 @@ impl LuaType {
     pub fn is_string(&self) -> bool {
         matches!(
             self,
-            LuaType::StringConst(_) | LuaType::String | LuaType::DocStringConst(_)
+            LuaType::StringConst(_)
+                | LuaType::String
+                | LuaType::DocStringConst(_)
+                | LuaType::Language(_)
         )
     }
 
@@ -430,6 +436,10 @@ impl LuaType {
         matches!(self, LuaType::TypeGuard(_))
     }
 
+    pub fn is_multi_line_union(&self) -> bool {
+        matches!(self, LuaType::MultiLineUnion(_))
+    }
+
     pub fn from_vec(types: Vec<LuaType>) -> Self {
         return match types.len() {
             0 => LuaType::Nil,
@@ -573,7 +583,7 @@ impl From<LuaTupleType> for LuaType {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct LuaFunctionType {
-    is_async: bool,
+    async_state: AsyncState,
     is_colon_define: bool,
     params: Vec<(String, Option<LuaType>)>,
     ret: LuaType,
@@ -595,21 +605,21 @@ impl TypeVisitTrait for LuaFunctionType {
 
 impl LuaFunctionType {
     pub fn new(
-        is_async: bool,
+        async_state: AsyncState,
         is_colon_define: bool,
         params: Vec<(String, Option<LuaType>)>,
         ret: LuaType,
     ) -> Self {
         Self {
-            is_async,
+            async_state,
             is_colon_define,
             params,
             ret,
         }
     }
 
-    pub fn is_async(&self) -> bool {
-        self.is_async
+    pub fn get_async_state(&self) -> AsyncState {
+        self.async_state
     }
 
     pub fn is_colon_define(&self) -> bool {
@@ -1284,17 +1294,29 @@ impl GenericTplId {
     pub fn is_type(&self) -> bool {
         matches!(self, GenericTplId::Type(_))
     }
+
+    pub fn with_idx(&self, idx: u32) -> Self {
+        match self {
+            GenericTplId::Type(_) => GenericTplId::Type(idx),
+            GenericTplId::Func(_) => GenericTplId::Func(idx),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct GenericTpl {
     tpl_id: GenericTplId,
     name: ArcIntern<SmolStr>,
+    is_variadic: bool,
 }
 
 impl GenericTpl {
-    pub fn new(tpl_id: GenericTplId, name: ArcIntern<SmolStr>) -> Self {
-        Self { tpl_id, name }
+    pub fn new(tpl_id: GenericTplId, name: ArcIntern<SmolStr>, is_variadic: bool) -> Self {
+        Self {
+            tpl_id,
+            name,
+            is_variadic,
+        }
     }
 
     pub fn get_tpl_id(&self) -> GenericTplId {
@@ -1303,6 +1325,10 @@ impl GenericTpl {
 
     pub fn get_name(&self) -> &str {
         &self.name
+    }
+
+    pub fn is_variadic(&self) -> bool {
+        self.is_variadic
     }
 }
 

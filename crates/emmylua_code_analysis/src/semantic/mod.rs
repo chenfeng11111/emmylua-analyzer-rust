@@ -40,7 +40,7 @@ pub use visibility::check_export_visibility;
 use visibility::check_visibility;
 
 use crate::semantic::member::find_members_with_key;
-use crate::{Emmyrc, LuaDocument, LuaSemanticDeclId, db_index::LuaTypeDeclId};
+use crate::{Emmyrc, LuaDocument, LuaSemanticDeclId, ModuleInfo, db_index::LuaTypeDeclId};
 use crate::{
     FileId,
     db_index::{DbIndex, LuaType},
@@ -84,15 +84,19 @@ impl<'a> SemanticModel<'a> {
         }
     }
 
-    pub fn get_document(&self) -> LuaDocument {
+    pub fn get_document(&'_ self) -> LuaDocument<'_> {
         self.db.get_vfs().get_document(&self.file_id).unwrap()
     }
 
-    pub fn get_document_by_file_id(&self, file_id: FileId) -> Option<LuaDocument> {
+    pub fn get_module(&self) -> Option<&ModuleInfo> {
+        self.db.get_module_index().get_module(self.file_id)
+    }
+
+    pub fn get_document_by_file_id(&'_ self, file_id: FileId) -> Option<LuaDocument<'_>> {
         self.db.get_vfs().get_document(&file_id)
     }
 
-    pub fn get_document_by_uri(&self, uri: &Uri) -> Option<LuaDocument> {
+    pub fn get_document_by_uri(&'_ self, uri: &Uri) -> Option<LuaDocument<'_>> {
         let file_id = self.db.get_vfs().get_file_id(&uri)?;
         self.db.get_vfs().get_document(&file_id)
     }
@@ -259,6 +263,10 @@ impl<'a> SemanticModel<'a> {
 
     pub fn get_emmyrc(&self) -> &Emmyrc {
         &self.emmyrc
+    }
+
+    pub fn get_emmyrc_arc(&self) -> Arc<Emmyrc> {
+        self.emmyrc.clone()
     }
 
     pub fn get_root(&self) -> &LuaChunk {

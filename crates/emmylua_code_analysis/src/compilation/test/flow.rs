@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod test {
-
     use crate::{DiagnosticCode, LuaType, VirtualWorkspace};
 
     #[test]
@@ -36,7 +35,7 @@ mod test {
         ws.def(
             r#"
         ---@class Object
-        
+
         ---@class T
         local inject2class ---@type (Object| T)?
         if jsonClass then
@@ -94,10 +93,10 @@ mod test {
         end
 
         if type(props.bar) == 'function' then
-            local foo = props.bar() 
+            local foo = props.bar()
         end
 
-        local foo = props.bar and props.bar() or nil 
+        local foo = props.bar and props.bar() or nil
         "#
         ));
     }
@@ -311,8 +310,8 @@ end
         function baz() end
 
         local a
-        a = baz() -- a has type nil but should be string    
-        d = a    
+        a = baz() -- a has type nil but should be string
+        d = a
         "#
         ));
 
@@ -334,7 +333,7 @@ end
             end
 
             a = t
-        end   
+        end
         "#,
         );
 
@@ -497,7 +496,7 @@ end
             ---@param data D10.data
             local function init(data)
                 ---@cast data table
-                
+
                 b = data -- data 现在仍为 `10.data` 而不是 `table`
             end
             "#,
@@ -630,15 +629,15 @@ end
             local function isInteger(n)
                 return true
             end
-            
+
             local a ---@type integer | string
-            
+
             if isInteger(a) then
                 d = a
             else
                 e = a
-            end 
-            
+            end
+
         "#,
         );
 
@@ -932,9 +931,9 @@ end
             local function instanceOf(inst, type)
                 return true
             end
-            
+
             local ret --- @type string | nil
-            
+
             if instanceOf(ret, "string") then
                 a = ret
             end
@@ -1174,8 +1173,25 @@ end
             end
             "#,
         );
-        let a = ws.expr_ty("A");
-        assert_eq!(ws.humanize_type(a), "T");
+
+        // Note: we can't use `ws.ty_expr("A")` to get a true type of `A`
+        // because `infer_global_type` will not allow generic variables
+        // from `bindGC` to escape into global space.
+        let db = &ws.analysis.compilation.db;
+        let decl_id = db
+            .get_global_index()
+            .get_global_decl_ids("A")
+            .unwrap()
+            .first()
+            .unwrap()
+            .clone();
+        let typ = db
+            .get_type_index()
+            .get_type_cache(&decl_id.into())
+            .unwrap()
+            .as_type();
+
+        assert_eq!(ws.humanize_type(typ.clone()), "T");
     }
 
     #[test]
@@ -1265,10 +1281,10 @@ end
         ws.def(
             r#"
             ---@class Node
-            ---@field parent? Node 
+            ---@field parent? Node
 
             ---@class Subject<T>: Node
-            ---@field package root? Node 
+            ---@field package root? Node
             Subject = {}
             "#,
         );
@@ -1283,5 +1299,60 @@ end
         );
         let a = ws.expr_ty("A");
         assert_eq!(ws.humanize_type(a), "Node");
+    }
+
+    #[test]
+    fn test_return_cast_multi_file() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def_file(
+            "test.lua",
+            r#"
+            local M = {}
+
+            --- @return boolean
+            --- @return_cast _obj function
+            function M.is_callable(_obj) end
+
+            return M
+            "#,
+        );
+        ws.def(
+            r#"
+            local test = require("test")
+
+            local obj
+
+            if test.is_callable(obj) then
+                o = obj
+            end
+            "#,
+        );
+        let a = ws.expr_ty("o");
+        let expected = LuaType::Function;
+        assert_eq!(a, expected);
+    }
+
+    #[test]
+    fn test_issue_734() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.check_code_for(
+            DiagnosticCode::AssignTypeMismatch,
+            r#"
+local a --- @type string[]
+
+assert(#a >= 1)
+
+--- @type string
+_ = a[1]
+
+assert(#a == 1)
+
+--- @type string
+_ = a[1]
+
+--- @type string
+_2 = a[1]
+            "#
+        ));
     }
 }

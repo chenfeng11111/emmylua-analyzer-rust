@@ -151,7 +151,7 @@ function ipairs(t) end
 ---
 --- Lua does not check the consistency of binary chunks. Maliciously crafted
 --- binary chunks can crash the interpreter.
----@param chunk (fun(...:any):string) | string
+---@param chunk (fun(...:any):string) | Language<"Lua">
 ---@param chunkname? string
 ---@param mode? std.loadmode
 ---@param env? table
@@ -166,7 +166,7 @@ function load(chunk, chunkname, mode, env) end
 ---
 ---
 ---@version 5.1, JIT
----@param text       string
+---@param text       Language<"Lua">
 ---@param chunkname? string
 ---@return function? chunk
 ---@return string?   error_message
@@ -245,7 +245,7 @@ function pairs(t) end
 --- `pcall` also returns all results from the call, after this first result. In
 --- case of any error, `pcall` returns **false** plus the error message.
 ---@generic T, R, R1
----@param f fun(...: T...): R1, R...
+---@param f sync fun(...: T...): R1, R...
 ---@param ... T...
 ---@return boolean, R1|string, R...
 function pcall(f, ...) end
@@ -443,8 +443,8 @@ _VERSION = "Lua 5.4"
 --- This function is similar to `pcall`, except that it sets a new message
 --- handler `msgh`.
 ---@generic T, R
----@param f fun(...:T...): R...
----@param msgh fun(err:string):void
+---@param f sync fun(...:T...): R...
+---@param msgh fun(err:any):any
 ---@param ... T...
 ---@return boolean, R...
 function xpcall(f, msgh, ...) end

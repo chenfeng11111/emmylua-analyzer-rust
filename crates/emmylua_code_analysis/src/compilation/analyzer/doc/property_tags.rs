@@ -1,5 +1,6 @@
 use crate::{
-    LuaDeclId, LuaExport, LuaExportScope, LuaNoDiscard, LuaSemanticDeclId, LuaSignatureId,
+    AsyncState, LuaDeclId, LuaExport, LuaExportScope, LuaNoDiscard, LuaSemanticDeclId,
+    LuaSignatureId,
 };
 
 use super::{
@@ -17,7 +18,7 @@ pub fn analyze_visibility(
     analyzer: &mut DocAnalyzer,
     visibility: LuaDocTagVisibility,
 ) -> Option<()> {
-    let visibility_kind = visibility.get_visibility_token()?.get_visibility();
+    let visibility_kind = visibility.get_visibility_token()?.get_visibility()?;
     let owner_id = get_owner_id_or_report(analyzer, &visibility)?;
 
     analyzer.db.get_property_index_mut().add_visibility(
@@ -110,7 +111,7 @@ pub fn analyze_async(analyzer: &mut DocAnalyzer, tag: LuaDocTagAsync) -> Option<
         .get_signature_index_mut()
         .get_mut(&signature_id)?;
 
-    signature.is_async = true;
+    signature.async_state = AsyncState::Async;
 
     Some(())
 }

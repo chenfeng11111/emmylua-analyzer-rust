@@ -8,20 +8,26 @@ use internment::ArcIntern;
 use rowan::TextRange;
 use smol_str::SmolStr;
 
-use crate::{db_index::{
-    DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
-    LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
-}, enum_variable_is_param, semantic::{
-    generic::{instantiate_type_generic, TypeSubstitutor},
-    infer::{
-        infer_name::get_name_expr_var_ref_id,
-        narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
-        VarRefId,
+use crate::{
+    CacheEntry, GenericTpl, InFiled, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId, LuaInferCache,
+    LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps,
+    db_index::{
+        DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
+        LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
     },
-    member::get_buildin_type_map_type_id,
-    type_check::{self, check_type_compact},
-    InferGuard,
-}, CacheEntry, InFiled, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId, LuaFunctionType, LuaInferCache, LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps};
+    enum_variable_is_param, get_tpl_ref_extend_type,
+    semantic::{
+        InferGuard,
+        generic::{TypeSubstitutor, instantiate_type_generic},
+        infer::{
+            VarRefId,
+            infer_name::get_name_expr_var_ref_id,
+            narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
+        },
+        member::get_buildin_type_map_type_id,
+        type_check::{self, check_type_compact},
+    },
+};
 
 use super::{infer_expr, infer_name::infer_global_type, InferFailReason, InferResult};
 
@@ -144,7 +150,11 @@ pub fn infer_member_by_member_key(
     match &prefix_type {
         LuaType::Table | LuaType::Any | LuaType::Unknown => Ok(LuaType::Any),
         LuaType::TableConst(id) => infer_table_member(db, cache, id.clone(), index_expr),
-        LuaType::String | LuaType::Io | LuaType::StringConst(_) | LuaType::DocStringConst(_) => {
+        LuaType::String
+        | LuaType::Io
+        | LuaType::StringConst(_)
+        | LuaType::DocStringConst(_)
+        | LuaType::Language(_) => {
             let decl_id =
                 get_buildin_type_map_type_id(&prefix_type).ok_or(InferFailReason::None)?;
             infer_custom_type_member(db, cache, decl_id, index_expr, infer_guard)
@@ -167,6 +177,7 @@ pub fn infer_member_by_member_key(
         LuaType::Instance(inst) => infer_instance_member(db, cache, inst, index_expr, infer_guard),
         LuaType::Namespace(ns) => infer_namespace_member(db, cache, ns, index_expr),
         LuaType::Array(array_type) => infer_array_member(db, cache, array_type, index_expr),
+        LuaType::TplRef(tpl) => infer_tpl_ref_member(db, cache, tpl, index_expr, infer_guard),
         _ => Err(InferFailReason::FieldNotFound),
     }
 }
@@ -426,7 +437,7 @@ fn infer_custom_type_member(
                 }
             }
         }
-        
+
         if let Some(member_item) = db.get_member_index().get_member_lua_behavior(db, &prefix_type_id, &key) {
             // lua behavior args成员
             return member_item.resolve_type(db);
@@ -1275,4 +1286,26 @@ fn expr_to_member_key(
         }
     }
     Some(keys)
+}
+
+fn infer_tpl_ref_member(
+    db: &DbIndex,
+    cache: &mut LuaInferCache,
+    generic: &GenericTpl,
+    index_expr: LuaIndexMemberExpr,
+    infer_guard: &mut InferGuard,
+) -> InferResult {
+    let extend_type = get_tpl_ref_extend_type(
+        db,
+        cache,
+        &LuaType::TplRef(generic.clone().into()),
+        index_expr
+            .get_index_expr()
+            .ok_or(InferFailReason::None)?
+            .get_prefix_expr()
+            .ok_or(InferFailReason::None)?,
+        0,
+    )
+    .ok_or(InferFailReason::None)?;
+    return infer_member_by_member_key(db, cache, &extend_type, index_expr.clone(), infer_guard);
 }

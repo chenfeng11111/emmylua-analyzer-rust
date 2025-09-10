@@ -151,7 +151,10 @@ impl LuaNumberToken {
         if !self.is_int() {
             return 0;
         }
-        int_token_value(&self.token).unwrap_or_default()
+        match int_token_value(&self.token) {
+            Ok(value) => value.as_integer().unwrap_or(0),
+            Err(_) => 0,
+        }
     }
 }
 
@@ -555,7 +558,7 @@ impl LuaAstToken for LuaDocVisibilityToken {
 }
 
 impl LuaDocVisibilityToken {
-    pub fn get_visibility(&self) -> VisibilityKind {
+    pub fn get_visibility(&self) -> Option<VisibilityKind> {
         VisibilityKind::to_visibility_kind(self.token.text())
     }
 }

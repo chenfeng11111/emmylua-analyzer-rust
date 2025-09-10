@@ -1,8 +1,9 @@
 use emmylua_code_analysis::{
-    DbIndex, LuaMemberInfo, LuaSemanticDeclId, LuaType, LuaTypeDeclId, SemanticModel,
-    enum_variable_is_param,
+    DbIndex, LuaMemberInfo, LuaMemberKey, LuaSemanticDeclId, LuaType, LuaTypeDeclId, SemanticModel,
+    enum_variable_is_param, get_tpl_ref_extend_type,
 };
 use emmylua_parser::{LuaAstNode, LuaAstToken, LuaIndexExpr, LuaStringToken};
+use std::collections::HashMap;
 
 use crate::handlers::completion::{
     add_completions::{CompletionTriggerStatus, add_member_completion},
@@ -27,7 +28,20 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
     };
 
     let prefix_expr = index_expr.get_prefix_expr()?;
-    let prefix_type = builder.semantic_model.infer_expr(prefix_expr.into()).ok()?;
+    let prefix_type = match builder
+        .semantic_model
+        .infer_expr(prefix_expr.clone())
+        .ok()?
+    {
+        LuaType::TplRef(tpl) => get_tpl_ref_extend_type(
+            builder.semantic_model.get_db(),
+            &mut builder.semantic_model.get_cache().borrow_mut(),
+            &LuaType::TplRef(tpl.clone().into()),
+            prefix_expr.clone(),
+            0,
+        )?,
+        prefix_type => prefix_type,
+    };
     // 如果是枚举类型且为函数参数, 则不进行补全
     if enum_variable_is_param(
         builder.semantic_model.get_db(),
@@ -41,8 +55,17 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
     }
 
     let member_info_map = builder.semantic_model.get_member_info_map(&prefix_type)?;
+
+    add_completions_for_members(builder, &member_info_map, completion_status)
+}
+
+pub fn add_completions_for_members(
+    builder: &mut CompletionBuilder,
+    members: &HashMap<LuaMemberKey, Vec<LuaMemberInfo>>,
+    completion_status: CompletionTriggerStatus,
+) -> Option<()> {
     // 排序
-    let mut sorted_entries: Vec<_> = member_info_map.iter().collect();
+    let mut sorted_entries: Vec<_> = members.iter().collect();
     sorted_entries.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
     for (_, member_infos) in sorted_entries {

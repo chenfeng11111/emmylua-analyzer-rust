@@ -88,6 +88,9 @@ pub enum LuaAst {
     LuaDocTagAs(LuaDocTagAs),
     LuaDocTagReturnCast(LuaDocTagReturnCast),
     LuaDocTagExport(LuaDocTagExport),
+    LuaDocTagLanguage(LuaDocTagLanguage),
+    // doc description
+    LuaDocDescription(LuaDocDescription),
 
     // doc type
     LuaDocNameType(LuaDocNameType),
@@ -173,6 +176,8 @@ impl LuaAstNode for LuaAst {
             LuaAst::LuaDocTagAs(node) => node.syntax(),
             LuaAst::LuaDocTagReturnCast(node) => node.syntax(),
             LuaAst::LuaDocTagExport(node) => node.syntax(),
+            LuaAst::LuaDocTagLanguage(node) => node.syntax(),
+            LuaAst::LuaDocDescription(node) => node.syntax(),
             LuaAst::LuaDocNameType(node) => node.syntax(),
             LuaAst::LuaDocArrayType(node) => node.syntax(),
             LuaAst::LuaDocFuncType(node) => node.syntax(),
@@ -265,6 +270,7 @@ impl LuaAstNode for LuaAst {
             LuaSyntaxKind::DocTagAs => true,
             LuaSyntaxKind::DocTagReturnCast => true,
             LuaSyntaxKind::DocTagExport => true,
+            LuaSyntaxKind::DocTagLanguage => true,
             LuaSyntaxKind::TypeName => true,
             LuaSyntaxKind::TypeArray => true,
             LuaSyntaxKind::TypeFun => true,
@@ -403,6 +409,12 @@ impl LuaAstNode for LuaAst {
             }
             LuaSyntaxKind::DocTagExport => {
                 LuaDocTagExport::cast(syntax).map(LuaAst::LuaDocTagExport)
+            }
+            LuaSyntaxKind::DocTagLanguage => {
+                LuaDocTagLanguage::cast(syntax).map(LuaAst::LuaDocTagLanguage)
+            }
+            LuaSyntaxKind::DocDescription => {
+                LuaDocDescription::cast(syntax).map(LuaAst::LuaDocDescription)
             }
             LuaSyntaxKind::TypeName => LuaDocNameType::cast(syntax).map(LuaAst::LuaDocNameType),
             LuaSyntaxKind::TypeArray => LuaDocArrayType::cast(syntax).map(LuaAst::LuaDocArrayType),

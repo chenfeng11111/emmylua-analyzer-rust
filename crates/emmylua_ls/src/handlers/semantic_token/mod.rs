@@ -1,4 +1,6 @@
 mod build_semantic_tokens;
+mod function_string_highlight;
+mod language_injector;
 mod semantic_token_builder;
 
 use crate::context::{ClientId, ServerContextSnapshot};
@@ -14,36 +16,44 @@ use tokio_util::sync::CancellationToken;
 
 use super::RegisterCapabilities;
 
-static mut SEMANTIC_MULTILINE_SUPPORT: bool = false;
-
 pub async fn on_semantic_token_handler(
     context: ServerContextSnapshot,
     params: SemanticTokensParams,
     _: CancellationToken,
 ) -> Option<SemanticTokensResult> {
     let uri = params.text_document.uri;
-    let analysis = context.analysis.read().await;
-    let config_manager = context.workspace_manager.read().await;
-    let client_id = config_manager.client_config.client_id;
-    let _ = config_manager;
+    let analysis = context.analysis().read().await;
     let file_id = analysis.get_file_id(&uri)?;
-    semantic_token(&analysis, file_id, client_id)
+
+    let workspace_manager = context.workspace_manager().read().await;
+    let client_id = workspace_manager.client_config.client_id;
+    let _ = workspace_manager;
+
+    semantic_token(
+        &analysis,
+        file_id,
+        &context.client_capabilities(),
+        client_id,
+    )
 }
 
 pub fn semantic_token(
     analysis: &EmmyLuaAnalysis,
     file_id: FileId,
+    client_capabilities: &ClientCapabilities,
     client_id: ClientId,
 ) -> Option<SemanticTokensResult> {
-    let mut semantic_model = analysis.compilation.get_semantic_model(file_id)?;
-    if !semantic_model.get_emmyrc().semantic_tokens.enable {
+    let semantic_model = analysis.compilation.get_semantic_model(file_id)?;
+    let emmyrc = semantic_model.get_emmyrc();
+    if !emmyrc.semantic_tokens.enable {
         return None;
     }
 
     let result = build_semantic_tokens(
-        &mut semantic_model,
-        unsafe { SEMANTIC_MULTILINE_SUPPORT },
+        &semantic_model,
+        supports_multiline_tokens(client_capabilities),
         client_id,
+        emmyrc,
     )?;
 
     Some(SemanticTokensResult::Tokens(SemanticTokens {
@@ -57,7 +67,7 @@ pub struct SemanticTokenCapabilities;
 impl RegisterCapabilities for SemanticTokenCapabilities {
     fn register_capabilities(
         server_capabilities: &mut ServerCapabilities,
-        client_capabilities: &ClientCapabilities,
+        _client_capabilities: &ClientCapabilities,
     ) {
         server_capabilities.semantic_tokens_provider = Some(
             SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
@@ -69,14 +79,10 @@ impl RegisterCapabilities for SemanticTokenCapabilities {
                 ..Default::default()
             }),
         );
-
-        if is_support_muliline_tokens(client_capabilities) {
-            unsafe { SEMANTIC_MULTILINE_SUPPORT = true };
-        }
     }
 }
 
-fn is_support_muliline_tokens(client_capability: &ClientCapabilities) -> bool {
+fn supports_multiline_tokens(client_capability: &ClientCapabilities) -> bool {
     if let Some(text_document) = &client_capability.text_document {
         if let Some(support) = &text_document.semantic_tokens {
             if let Some(support) = &support.multiline_token_support {

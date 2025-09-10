@@ -1,6 +1,6 @@
 [package]
 name = "emmylua_doc_cli"
-version = "0.10.0"
+version = "0.13.0"
 edition = "2024"
 authors = ["CppCXY"]
 description = "A command-line tool for generating lua documentation."
@@ -28,11 +28,22 @@ rowan.workspace = true
 walkdir.workspace = true
 tera.workspace = true
 include_dir.workspace = true
-clap.workspace = true
 num-traits.workspace = true
 log.workspace = true
 fern.workspace = true
 
+[dependencies.clap]
+workspace = true
+optional = true
+
+[dependencies.mimalloc]
+workspace = true
+optional = true
+
 [[bin]]
 name = "emmylua_doc_cli"
+required-features = ["cli"]
 
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:mimalloc"]

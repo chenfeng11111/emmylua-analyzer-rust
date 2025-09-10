@@ -3,9 +3,10 @@ use std::collections::HashSet;
 use itertools::Itertools;
 
 use crate::{
-    DbIndex, GenericTpl, LuaAliasCallType, LuaFunctionType, LuaGenericType, LuaInstanceType,
-    LuaIntersectionType, LuaMemberKey, LuaMemberOwner, LuaObjectType, LuaSignatureId,
-    LuaStringTplType, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType, VariadicType,
+    AsyncState, DbIndex, GenericTpl, LuaAliasCallType, LuaFunctionType, LuaGenericType,
+    LuaInstanceType, LuaIntersectionType, LuaMemberKey, LuaMemberOwner, LuaObjectType,
+    LuaSignatureId, LuaStringTplType, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
+    TypeSubstitutor, VariadicType,
 };
 
 use super::{LuaAliasCallKind, LuaMultiLineUnion};
@@ -105,6 +106,8 @@ pub fn humanize_type(db: &DbIndex, ty: &LuaType, level: RenderLevel) -> String {
             let str = humanize_doc_function_type(db, lua_func, level);
             format!("Constructor\n\n{}", str)
         }
+        LuaType::ConstTplRef(const_tpl) => humanize_const_tpl_ref_type(const_tpl),
+        LuaType::Language(s) => s.to_string(),
         _ => "unknown".to_string(),
     }
 }
@@ -126,7 +129,13 @@ fn humanize_def_type(db: &DbIndex, id: &LuaTypeDeclId, level: RenderLevel) -> St
 
     let generic_names = generic
         .iter()
-        .map(|it| it.0.clone())
+        .map(|it| {
+            if it.is_variadic {
+                format!("{}...", it.name)
+            } else {
+                it.name.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}<{}>", full_name, generic_names)
@@ -362,10 +371,10 @@ fn humanize_doc_function_type(
         return "fun(...) -> ...".to_string();
     }
 
-    let prev = if lua_func.is_async() {
-        "async fun"
-    } else {
-        "fun"
+    let prev = match lua_func.get_async_state() {
+        AsyncState::None => "fun",
+        AsyncState::Async => "async fun",
+        AsyncState::Sync => "sync fun",
     };
     let params = lua_func
         .get_params()
@@ -489,14 +498,28 @@ fn humanize_generic_type(db: &DbIndex, generic: &LuaGenericType, level: RenderLe
 
     let full_name = type_decl.get_full_name();
 
-    let generic_params = generic
+    let generic_inst_params = generic
         .get_params()
         .iter()
         .map(|ty| humanize_type(db, ty, level.next_level()))
         .collect::<Vec<_>>()
         .join(",");
 
-    format!("{}<{}>", full_name, generic_params)
+    let generic_base = format!("{}<{}>", full_name, generic_inst_params);
+    if (level == RenderLevel::Detailed || level == RenderLevel::Documentation)
+        && type_decl.is_alias()
+    {
+        let substituor = TypeSubstitutor::from_type_array(generic.get_params().clone());
+        if let Some(origin_type) = type_decl.get_alias_origin(db, Some(&substituor)) {
+            // prevent infinite recursion
+            if origin_type.is_function() {
+                let origin_type_str = humanize_type(db, &origin_type, level);
+                return format!("{} = {}", generic_base, origin_type_str);
+            }
+        }
+    }
+
+    generic_base
 }
 
 fn humanize_table_const_type_detail_and_simple(
@@ -606,6 +629,10 @@ fn humanize_table_generic_type(
 
 fn humanize_tpl_ref_type(tpl: &GenericTpl) -> String {
     tpl.get_name().to_string()
+}
+
+fn humanize_const_tpl_ref_type(const_tpl: &GenericTpl) -> String {
+    const_tpl.get_name().to_string()
 }
 
 fn humanize_str_tpl_ref_type(str_tpl: &LuaStringTplType) -> String {

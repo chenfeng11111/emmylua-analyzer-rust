@@ -4,6 +4,110 @@
 
 ---
 
+## [0.12.0] - 2025-8-22
+
+### 🐛 Fixed
+- **Crash issue fixed**: Fixed a crash caused by parsing Unicode characters in comments.
+- **Large table performance issue fixed**: Fixed a performance issue where parsing large array tables in projects caused severe slowdowns.
+- **Generic type matching fixed**: Fixed an issue with incorrect matching of `constTpl<T>` types affecting generic type hints.
+
+### ✨ Added
+- **Markdown syntax highlighting enabled by default**: Markdown syntax highlighting in comments is now enabled by default, including partial syntax highlighting for code blocks within comments.
+- **Support for `@language`**: Added support for using `@language` in comments to specify the language of code blocks, for example:
+  ```lua
+  ---@language lua
+  local d = [[
+    print("Hello, world!")
+  ]]
+  ```
+  This enables syntax highlighting for Lua code.
+
+- **Support for `Language<T>` generic type**: You can now use `Language<T: string>` in parameter comments to specify the language of a parameter, for example:
+  ```lua
+  ---@param lang Language<"vim">
+  function vim_run(lang)
+  end
+
+  vim_run [[set ft=lua]]
+  ```
+  Supported injected languages: lua, vim, sql, json, shell, protobuf.
+
+- **Support for `keyof type`**: When a function parameter is `keyof type`, corresponding code completion is provided.
+
+## [0.11.0] - 2025-8-8
+
+### 🐛 Fixed
+- **Fixed a stack overflow crash**: Resolved an issue that caused the language server to crash due to excessive recursion.
+- **Fixed a deadlock issue**: Resolved an issue that caused the language server to hang indefinitely in Neovim.
+- **Fixed workspace libraries**: Resolved an issue where libraries in subdirectories were incorrectly added to the main workspace.
+- **Fixed error reporting**: Resolved an issue where error reports were not being generated correctly for table fields.
+
+### ✨ Added
+- **Support for Markdown/MarkdownRst**: Added support for Markdown and reStructuredText (RST) formats highlighted in documentation comments.
+This feature is disabled by default and can be enabled with the following configuration:
+```json
+{
+  "semanticTokens": {
+    "renderDocumentationMarkup": true
+  },
+  "doc": {
+    "syntax": "md"
+  }
+}
+```
+
+- **Support for external formatting tools**: Added support for external formatting tools. You can now configure an external formatter to format your Lua code. This feature can be enabled with the following configuration:
+```json
+{
+  "format": {
+    "externalTool": {
+      "program": "stylua",
+      "args": [
+        "-",
+        "--stdin-filepath",
+        "${file}",
+        "--indent-width=${indent_size}",
+        "--indent-type",
+        "${use_tabs:Tabs:Spaces}"
+      ]
+    }
+  }
+}
+```
+Note: The built-in formatter is not stylua, but emmyluacodestyle. This feature simply provides an extension point, allowing users to use their preferred formatting tool. In terms of performance, using this extension may be faster than using other plugins.
+
+- **Support for non-standard symbols**: Added support for non-standard symbols in Lua.
+
+```json
+{
+  "runtime": {
+    "nonstandardSymbol": [
+      "//",
+      "/**/",
+      "`",
+      "+=",
+      "-=",
+      "*=",
+      "/=",
+      "%=",
+      "^=",
+      "//=",
+      "|=",
+      "&=",
+      "<<=",
+      ">>=",
+      "||",
+      "&&",
+      "!",
+      "!=",
+      "continue"
+    ]
+  }
+}
+```
+
+
+
 ## [0.10.0] - 2025-7-27
 ### 🐛 Fixed
 - **Fix create an empty directory**:  Fixed an issue where the language server would create an empty directory.
@@ -19,7 +123,7 @@
 ---@param f1 fun(...: T...): any
 ---@param ... T...
 function invoke(f1, ...)
-    
+
 end
 
 invoke(function(a, b, c) -- infer as: integer, integer, integer
@@ -205,7 +309,7 @@ Also supports immutability checks for iterator variables in for loop statements.
 ## [0.8.0] - 2025-5-30
 
 ### ✨ Added
-- **New Standard Types**: 
+- **New Standard Types**:
   - `std.Unpack` type for better `unpack` function inference
   - `std.Rawget` type for better `rawget` function inference
 - **Generator Support**: Implementation similar to `luals`
@@ -323,7 +427,7 @@ Global configuration have less priority than the local one
 - **Flow Analyze Algorithm**: Refactor flow analyze algorithm
 
 ### 🐛 Fixed
-- **Self Inference**: Fix some self infer issue 
+- **Self Inference**: Fix some self infer issue
 - **Diagnostic Action**: Fix some diagnostic action issue
 - **Type Check and Completion**: Optimize some type check and completion
 
@@ -355,7 +459,7 @@ Global configuration have less priority than the local one
 
 ### ✨ Added
 - **Re-index Control**: Disable re-index in default, need to enable by `workspace.enableReindex`
-- **New Diagnostics**: Add New Diagnostics `inject_field`, `missing_fields`, `redefined_local`, `undefined_field`, `inject-field`, `missing-global-doc`, 
+- **New Diagnostics**: Add New Diagnostics `inject_field`, `missing_fields`, `redefined_local`, `undefined_field`, `inject-field`, `missing-global-doc`,
 `incomplete-signature-doc`, `circle-doc-class`, `assign-type-mismatch`, `unbalanced_assignments`, `check_return_count`, `duplicate_require`, `circle_doc_class`, `incomplete_signature_doc`, `unnecessary_assert`
 - **Boolean Type Support**: Support `true` and `false` as type
 - **Compact Fun Return Syntax**: Compact luals fun return syntax like: `(name: string, age: number)`
@@ -423,7 +527,7 @@ Global configuration have less priority than the local one
   ```
 - **Enum Type Check Fix**: Fix enum type check
 - **Custom Operator Infer Fix**: Fix custom operator infer
-- **Select Function Fix and Std.Select Type Addition**: Fix select function and add std.Select type 
+- **Select Function Fix and Std.Select Type Addition**: Fix select function and add std.Select type
 - **Union Type Refactor**: Refactor Union type
 - **Description Support for Type**: Add description to type
 - **Multi Union Description Support**: Support description without '#' on multi union
@@ -467,7 +571,7 @@ Global configuration have less priority than the local one
 
 ---
 
-## [0.4.6] 
+## [0.4.6]
 
 ### 🐛 Fixed
 - **Executable File Directory Hierarchy Issue**: Fix issue with executable file directory hierarchy being too deep.

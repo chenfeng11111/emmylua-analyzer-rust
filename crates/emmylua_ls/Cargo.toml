@@ -1,6 +1,6 @@
 [package]
 name = "emmylua_ls"
-version = "0.10.0"
+version = "0.13.0"
 edition = "2024"
 authors = ["CppCXY"]
 description = "A language server for emmylua."
@@ -14,6 +14,7 @@ categories = ["development-tools"]
 # local
 emmylua_code_analysis.workspace = true
 emmylua_parser.workspace = true
+emmylua_parser_desc.workspace = true
 
 # external
 lsp-server.workspace = true
@@ -42,6 +43,9 @@ optional = true
 [dependencies.mimalloc]
 workspace = true
 optional = true
+
+[dev-dependencies]
+googletest.workspace = true
 
 
 [[bin]]
