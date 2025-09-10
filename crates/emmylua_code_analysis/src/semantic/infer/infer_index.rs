@@ -8,26 +8,20 @@ use internment::ArcIntern;
 use rowan::TextRange;
 use smol_str::SmolStr;
 
-use crate::{
-    CacheEntry, GenericTpl, InFiled, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId, LuaInferCache,
-    LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps,
-    db_index::{
-        DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
-        LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
+use crate::{db_index::{
+    DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
+    LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
+}, enum_variable_is_param, get_tpl_ref_extend_type, semantic::{
+    generic::{instantiate_type_generic, TypeSubstitutor},
+    infer::{
+        infer_name::get_name_expr_var_ref_id,
+        narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
+        VarRefId,
     },
-    enum_variable_is_param, get_tpl_ref_extend_type,
-    semantic::{
-        InferGuard,
-        generic::{TypeSubstitutor, instantiate_type_generic},
-        infer::{
-            VarRefId,
-            infer_name::get_name_expr_var_ref_id,
-            narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
-        },
-        member::get_buildin_type_map_type_id,
-        type_check::{self, check_type_compact},
-    },
-};
+    member::get_buildin_type_map_type_id,
+    type_check::{self, check_type_compact},
+    InferGuard,
+}, AsyncState, CacheEntry, GenericTpl, InFiled, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId, LuaFunctionType, LuaInferCache, LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps};
 
 use super::{infer_expr, infer_name::infer_global_type, InferFailReason, InferResult};
 
@@ -417,7 +411,7 @@ fn infer_custom_type_member(
                 }
 
                 return Ok(LuaType::ConstructorFunction(LuaFunctionType::new(
-                    false,
+                    AsyncState::None,
                     false,
                     params,
                     LuaType::SelfInfer

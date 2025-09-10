@@ -29,7 +29,7 @@ pub async fn on_code_lens_handler(
     }
 
     let client_id = context
-        .workspace_manager
+        .workspace_manager()
         .read()
         .await
         .client_config

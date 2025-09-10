@@ -56,7 +56,13 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
 
     let member_info_map = builder.semantic_model.get_member_info_map(&prefix_type)?;
 
-    add_completions_for_members(builder, &member_info_map, completion_status)
+    add_completions_for_members(builder, &member_info_map, completion_status);
+    // 添加
+    let member_info_map = builder.semantic_model.get_lua_behavior_args_map(&prefix_type)?;
+    for (_, member_infos) in member_info_map.iter() {
+        add_resolve_member_infos(builder, &member_infos, completion_status, true.into());
+    }
+    Some(())
 }
 
 pub fn add_completions_for_members(
@@ -70,12 +76,6 @@ pub fn add_completions_for_members(
 
     for (_, member_infos) in sorted_entries {
         add_resolve_member_infos(builder, &member_infos, completion_status, None);
-    }
-
-    // 添加
-    let member_info_map = builder.semantic_model.get_lua_behavior_args_map(&prefix_type)?;
-    for (_, member_infos) in member_info_map.iter() {
-        add_resolve_member_infos(builder, &member_infos, completion_status, true.into());
     }
 
     Some(())
