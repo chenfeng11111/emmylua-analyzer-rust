@@ -20,7 +20,7 @@ pub use function_provider::get_function_remove_nil;
 use rowan::TextRange;
 
 pub fn add_completions(builder: &mut CompletionBuilder) -> Option<()> {
-    postfix_provider::add_completion(builder);
+    // postfix_provider::add_completion(builder);
     // `function_provider`优先级必须高于`env_provider`
     function_provider::add_completion(builder);
     equality_comparison_provider::add_completion(builder);
