@@ -1,8 +1,5 @@
 use emmylua_code_analysis::{LuaDeclId, LuaSignatureId, LuaType};
-use emmylua_parser::{
-    LuaAssignStat, LuaAstNode, LuaAstToken, LuaForRangeStat, LuaForStat, LuaFuncStat,
-    LuaIfClauseStat, LuaIfStat, LuaLocalFuncStat, LuaLocalStat, LuaSyntaxKind, LuaSyntaxNode,
-};
+use emmylua_parser::{LuaAssignStat, LuaAstNode, LuaAstToken, LuaForRangeStat, LuaForStat, LuaFuncStat, LuaIfClauseStat, LuaIfStat, LuaLocalFuncStat, LuaLocalStat, LuaSyntaxKind, LuaSyntaxNode, LuaVarExpr};
 use lsp_types::SymbolKind;
 use std::ops::Add;
 
@@ -69,8 +66,10 @@ pub fn build_assign_stat_symbol(
         let range = assign_stat.get_range();
         let name = if is_global {
             format!("global {}", var.syntax().to_string())
-        } else {
+        } else if let LuaVarExpr::IndexExpr(_) = &var {
             format!("{}", var.syntax().to_string())
+        } else {
+            continue;
         };
         let symbol = LuaSymbol::new(name, None, SymbolKind::VARIABLE, range);
 
