@@ -8,8 +8,8 @@ use std::{path::PathBuf, str::FromStr, sync::Arc};
 use crate::{
     cmd_args::CmdArgs,
     context::{
-        FileDiagnostic, ProgressTask, ServerContextSnapshot, StatusBar, WorkspaceFileMatcher,
-        get_client_id, load_emmy_config,
+        FileDiagnostic, LspFeatures, ProgressTask, ServerContextSnapshot, StatusBar,
+        WorkspaceFileMatcher, get_client_id, load_emmy_config,
     },
     handlers::{
         initialized::collect_files::calculate_include_and_exclude,
@@ -69,10 +69,7 @@ pub async fn initialized_handler(
 
     // init config
     // todo! support multi config
-    let config_root: Option<PathBuf> = match main_root {
-        Some(root) => Some(PathBuf::from(root)),
-        None => None,
-    };
+    let config_root: Option<PathBuf> = main_root.map(PathBuf::from);
 
     let emmyrc = load_emmy_config(config_root, client_config.clone());
     load_editorconfig(workspace_folders.clone());
@@ -84,6 +81,7 @@ pub async fn initialized_handler(
         context.analysis(),
         context.status_bar(),
         context.file_diagnostic(),
+        context.lsp_features(),
         workspace_folders,
         emmyrc.clone(),
     )
@@ -105,6 +103,7 @@ pub async fn init_analysis(
     analysis: &RwLock<EmmyLuaAnalysis>,
     status_bar: &StatusBar,
     file_diagnostic: &FileDiagnostic,
+    lsp_features: &LspFeatures,
     workspace_folders: Vec<PathBuf>,
     emmyrc: Arc<Emmyrc>,
 ) {
@@ -176,9 +175,11 @@ pub async fn init_analysis(
 
     drop(mut_analysis);
 
-    file_diagnostic
-        .add_workspace_diagnostic_task(0, false)
-        .await;
+    if !lsp_features.supports_workspace_diagnostic() {
+        file_diagnostic
+            .add_workspace_diagnostic_task(0, false)
+            .await;
+    }
 }
 
 pub fn get_workspace_folders(params: &InitializeParams) -> Vec<PathBuf> {
@@ -195,7 +196,7 @@ pub fn get_workspace_folders(params: &InitializeParams) -> Vec<PathBuf> {
         // However, most LSP clients still provide this field
         #[allow(deprecated)]
         if let Some(uri) = &params.root_uri {
-            let root_workspace = uri_to_file_path(&uri);
+            let root_workspace = uri_to_file_path(uri);
             if let Some(path) = root_workspace {
                 workspace_folders.push(path);
             }

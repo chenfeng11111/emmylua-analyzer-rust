@@ -5,7 +5,7 @@ use lsp_types::{
 };
 use std::time::Duration;
 
-use crate::context::ServerContextSnapshot;
+use crate::context::{ServerContextSnapshot, WorkspaceDiagnosticLevel};
 
 pub async fn on_did_open_text_document(
     context: ServerContextSnapshot,
@@ -24,13 +24,15 @@ pub async fn on_did_open_text_document(
     }
 
     let file_id = analysis.update_file_by_uri(&uri, Some(text));
-    let emmyrc = analysis.get_emmyrc();
-    let interval = emmyrc.diagnostics.diagnostic_interval.unwrap_or(500);
-    if let Some(file_id) = file_id {
-        context
-            .file_diagnostic()
-            .add_diagnostic_task(file_id, interval)
-            .await;
+    if !context.lsp_features().supports_pull_diagnostic() {
+        let emmyrc = analysis.get_emmyrc();
+        let interval = emmyrc.diagnostics.diagnostic_interval.unwrap_or(500);
+        if let Some(file_id) = file_id {
+            context
+                .file_diagnostic()
+                .add_diagnostic_task(file_id, interval)
+                .await;
+        }
     }
 
     let mut workspace = context.workspace_manager().write().await;
@@ -46,6 +48,15 @@ pub async fn on_did_save_text_document(
 ) -> Option<()> {
     let emmyrc = context.analysis().read().await.get_emmyrc();
     if !emmyrc.workspace.enable_reindex {
+        if context.lsp_features().supports_workspace_diagnostic() {
+            context
+                .file_diagnostic()
+                .cancel_workspace_diagnostic()
+                .await;
+            let workspace_manager = context.workspace_manager().write().await;
+            workspace_manager.update_workspace_version(WorkspaceDiagnosticLevel::Slow, true);
+        }
+
         return Some(());
     }
 
@@ -87,13 +98,14 @@ pub async fn on_did_change_text_document(
         workspace.extend_reindex_delay().await;
         drop(workspace);
     }
-    if let Some(file_id) = file_id {
-        context
-            .file_diagnostic()
-            .add_diagnostic_task(file_id, interval)
-            .await;
+    if !context.lsp_features().supports_pull_diagnostic() {
+        if let Some(file_id) = file_id {
+            context
+                .file_diagnostic()
+                .add_diagnostic_task(file_id, interval)
+                .await;
+        }
     }
-
     Some(())
 }
 
@@ -107,21 +119,23 @@ pub async fn on_did_close_document(
         .current_open_files
         .remove(&params.text_document.uri);
     drop(workspace);
+    let lsp_features = context.lsp_features();
 
     // 如果关闭后文件不存在, 则移除
-    if let Some(file_path) = uri_to_file_path(uri) {
-        if !file_path.exists() {
-            let mut mut_analysis = context.analysis().write().await;
-            mut_analysis.remove_file_by_uri(uri);
-            drop(mut_analysis);
+    if let Some(file_path) = uri_to_file_path(uri)
+        && !file_path.exists()
+    {
+        let mut mut_analysis = context.analysis().write().await;
+        mut_analysis.remove_file_by_uri(uri);
+        drop(mut_analysis);
 
+        if !lsp_features.supports_pull_diagnostic() {
             context
                 .file_diagnostic()
-                .clear_file_diagnostics(uri.clone())
-                .await;
-
-            return Some(());
+                .clear_push_file_diagnostics(uri.clone());
         }
+
+        return Some(());
     }
 
     let analysis = context.analysis().read().await;
@@ -136,11 +150,12 @@ pub async fn on_did_close_document(
         let mut mut_analysis = context.analysis().write().await;
         mut_analysis.remove_file_by_uri(uri);
         drop(mut_analysis);
-        // 发送空诊断消息以清除客户端显示的诊断
-        context
-            .file_diagnostic()
-            .clear_file_diagnostics(uri.clone())
-            .await;
+
+        if !lsp_features.supports_pull_diagnostic() {
+            context
+                .file_diagnostic()
+                .clear_push_file_diagnostics(uri.clone());
+        }
     }
 
     Some(())

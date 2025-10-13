@@ -1,6 +1,7 @@
 mod client;
 mod client_id;
 mod file_diagnostic;
+mod lsp_features;
 mod snapshot;
 mod status_bar;
 mod workspace_manager;
@@ -9,6 +10,7 @@ pub use client::ClientProxy;
 pub use client_id::{ClientId, get_client_id};
 use emmylua_code_analysis::EmmyLuaAnalysis;
 pub use file_diagnostic::FileDiagnostic;
+pub use lsp_features::LspFeatures;
 use lsp_server::{Connection, ErrorCode, Message, RequestId, Response};
 use lsp_types::ClientCapabilities;
 pub use snapshot::ServerContextSnapshot;
@@ -17,9 +19,7 @@ pub use status_bar::StatusBar;
 use std::{collections::HashMap, future::Future, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-pub use workspace_manager::WorkspaceFileMatcher;
-pub use workspace_manager::WorkspaceManager;
-pub use workspace_manager::load_emmy_config;
+pub use workspace_manager::*;
 
 use crate::context::snapshot::ServerContextInner;
 
@@ -31,7 +31,7 @@ pub struct ServerContext {
 }
 
 impl ServerContext {
-    pub fn new(conn: Connection, client_capabilities: Arc<ClientCapabilities>) -> Self {
+    pub fn new(conn: Connection, client_capabilities: ClientCapabilities) -> Self {
         let client = Arc::new(ClientProxy::new(Connection {
             sender: conn.sender.clone(),
             receiver: conn.receiver.clone(),
@@ -44,11 +44,13 @@ impl ServerContext {
             status_bar.clone(),
             client.clone(),
         ));
+        let lsp_features = Arc::new(LspFeatures::new(client_capabilities));
         let workspace_manager = Arc::new(RwLock::new(WorkspaceManager::new(
             analysis.clone(),
             client.clone(),
             status_bar.clone(),
             file_diagnostic.clone(),
+            lsp_features.clone(),
         )));
 
         ServerContext {
@@ -60,7 +62,7 @@ impl ServerContext {
                 file_diagnostic,
                 workspace_manager,
                 status_bar,
-                client_capabilities,
+                lsp_features,
             }),
         }
     }

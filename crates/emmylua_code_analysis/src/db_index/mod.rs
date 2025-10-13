@@ -18,13 +18,12 @@ use std::sync::Arc;
 
 use crate::{Emmyrc, FileId, Vfs};
 pub use declaration::*;
-use dependency::LuaDependencyIndex;
+pub use dependency::LuaDependencyIndex;
 pub use diagnostic::{AnalyzeError, DiagnosticAction, DiagnosticActionKind, DiagnosticIndex};
 pub use flow::*;
-pub use global::GlobalId;
-use global::LuaGlobalIndex;
+pub use global::{GlobalId, LuaGlobalIndex};
 pub use member::*;
-use metatable::LuaMetatableIndex;
+pub use metatable::LuaMetatableIndex;
 pub use module::*;
 pub use operators::*;
 pub use property::*;
@@ -54,6 +53,12 @@ pub struct DbIndex {
 }
 
 #[allow(unused)]
+impl Default for DbIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DbIndex {
     pub fn new() -> Self {
         Self {

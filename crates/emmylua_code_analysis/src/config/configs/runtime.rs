@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct EmmyrcRuntime {
     /// Lua version.
     #[serde(default)]
@@ -36,23 +37,7 @@ pub struct EmmyrcRuntime {
     pub special: HashMap<String, EmmyrcSpecialSymbol>,
 }
 
-impl Default for EmmyrcRuntime {
-    fn default() -> Self {
-        Self {
-            version: Default::default(),
-            require_like_function: Default::default(),
-            framework_versions: Default::default(),
-            extensions: Default::default(),
-            require_pattern: Default::default(),
-            class_default_call: Default::default(),
-            constructor: Default::default(),
-            nonstandard_symbol: Default::default(),
-            special: Default::default(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmmyrcLuaVersion {
     /// Lua 5.1
     #[serde(rename = "Lua5.1", alias = "Lua 5.1")]
@@ -74,13 +59,8 @@ pub enum EmmyrcLuaVersion {
     Lua55,
     /// Lua Latest
     #[serde(rename = "LuaLatest", alias = "Lua Latest")]
+    #[default]
     LuaLatest,
-}
-
-impl Default for EmmyrcLuaVersion {
-    fn default() -> Self {
-        EmmyrcLuaVersion::LuaLatest
-    }
 }
 
 impl EmmyrcLuaVersion {

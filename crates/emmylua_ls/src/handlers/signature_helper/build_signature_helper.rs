@@ -1,11 +1,11 @@
 use emmylua_code_analysis::{
     DbIndex, InFiled, LuaCompilation, LuaFunctionType, LuaGenericType, LuaInstanceType,
-    LuaOperatorMetaMethod, LuaOperatorOwner, LuaSignatureId, LuaType, LuaTypeDeclId, RenderLevel,
-    SemanticModel, TypeSubstitutor,
+    LuaOperatorMetaMethod, LuaOperatorOwner, LuaSemanticDeclId, LuaSignatureId, LuaType,
+    LuaTypeDeclId, RenderLevel, SemanticModel, TypeSubstitutor,
 };
 use emmylua_parser::{LuaAstNode, LuaCallExpr, LuaSyntaxToken, LuaTokenKind};
 use lsp_types::{
-    Documentation, MarkupContent, ParameterInformation, ParameterLabel, SignatureHelp,
+    Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, SignatureHelp,
     SignatureInformation,
 };
 use rowan::{NodeOrToken, TextRange};
@@ -27,7 +27,7 @@ pub fn build_signature_helper(
     let current_idx = get_current_param_index(&call_expr, &token)?;
     let help = match prefix_expr_type {
         LuaType::DocFunction(func_type) | LuaType::ConstructorFunction(func_type) => {
-            build_doc_function_signature_help(&builder, &func_type, colon_call, current_idx)
+            build_doc_function_signature_help(&builder, &func_type, colon_call, current_idx, None)
         }
         LuaType::Signature(signature_id) => {
             build_sig_id_signature_help(&builder, signature_id, colon_call, current_idx, false)
@@ -70,12 +70,11 @@ pub fn get_current_param_index(call_expr: &LuaCallExpr, token: &LuaSyntaxToken) 
     let mut current_idx = 0;
     let token_position = token.text_range().start();
     for node_or_token in arg_list.syntax().children_with_tokens() {
-        if let NodeOrToken::Token(token) = node_or_token {
-            if token.kind() == LuaTokenKind::TkComma.into() {
-                if token.text_range().start() <= token_position {
-                    current_idx += 1;
-                }
-            }
+        if let NodeOrToken::Token(token) = node_or_token
+            && token.kind() == LuaTokenKind::TkComma.into()
+            && token.text_range().start() <= token_position
+        {
+            current_idx += 1;
         }
     }
 
@@ -87,15 +86,12 @@ fn build_doc_function_signature_help(
     func_type: &LuaFunctionType,
     colon_call: bool,
     current_idx: usize,
+    description: Option<String>,
 ) -> Option<SignatureHelp> {
     let semantic_model = builder.semantic_model;
     let db = semantic_model.get_db();
     let mut current_idx = current_idx;
-    let params = func_type
-        .get_params()
-        .iter()
-        .map(|param| param.clone())
-        .collect::<Vec<_>>();
+    let params = func_type.get_params().to_vec();
     // 参数信息
     let mut param_infos = vec![];
     for param in params.iter() {
@@ -133,22 +129,30 @@ fn build_doc_function_signature_help(
         _ => {}
     }
 
-    if let Some((name, _)) = params.last() {
-        if name == "..." && current_idx >= params.len() {
-            current_idx = params.len() - 1;
-        }
+    if let Some((name, _)) = params.last()
+        && name == "..."
+        && current_idx >= params.len()
+    {
+        current_idx = params.len() - 1;
     }
 
     let label = build_function_label(
         builder,
         &param_infos,
         func_type.is_method(builder.semantic_model, None),
-        &func_type.get_ret(),
+        func_type.get_ret(),
     );
+
+    let documentation = description.map(|description| {
+        Documentation::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: description,
+        })
+    });
 
     let signature_info = SignatureInformation {
         label,
-        documentation: None,
+        documentation,
         parameters: Some(param_infos),
         active_parameter: Some(current_idx as u32),
     };
@@ -174,20 +178,18 @@ fn build_sig_id_signature_help(
     let mut current_idx = current_idx;
     let mut params = signature.get_type_params();
     let colon_define = signature.is_colon_define;
-    if is_call_operator {
-        if params.len() > 0 && !colon_define {
-            params.remove(0);
-        }
+    if is_call_operator && !params.is_empty() && !colon_define {
+        params.remove(0);
     }
     // 参数信息
     let mut param_infos = vec![];
     for param in params.iter() {
         let param_label = generate_param_label(db, param.clone());
         let mut documentation_string = String::new();
-        if let Some(desc) = signature.get_param_info_by_name(&param.0) {
-            if let Some(description) = &desc.description {
-                documentation_string.push_str(description);
-            }
+        if let Some(desc) = signature.get_param_info_by_name(&param.0)
+            && let Some(description) = &desc.description
+        {
+            documentation_string.push_str(description);
         }
 
         let documentation = if documentation_string.is_empty() {
@@ -230,16 +232,17 @@ fn build_sig_id_signature_help(
         _ => {}
     }
 
-    if let Some((name, _)) = params.last() {
-        if name == "..." && current_idx >= params.len() {
-            current_idx = params.len() - 1;
-        }
+    if let Some((name, _)) = params.last()
+        && name == "..."
+        && current_idx >= params.len()
+    {
+        current_idx = params.len() - 1;
     }
 
     let label = build_function_label(
         builder,
         &param_infos,
-        signature.is_method(&semantic_model, None),
+        signature.is_method(semantic_model, None),
         &signature.get_return_type(),
     );
 
@@ -252,8 +255,13 @@ fn build_sig_id_signature_help(
 
     let mut signatures = vec![signature_info];
     for overload in &signature.overloads {
-        let signature =
-            build_doc_function_signature_help(&builder, &overload, colon_call, origin_current_idx);
+        let signature = build_doc_function_signature_help(
+            builder,
+            overload,
+            colon_call,
+            origin_current_idx,
+            None,
+        );
         if let Some(mut signature) = signature {
             signature.signatures[0].documentation = builder.description.clone();
             signatures.push(signature.signatures[0].clone());
@@ -275,12 +283,23 @@ fn build_type_signature_help(
     current_idx: usize,
 ) -> Option<SignatureHelp> {
     let db = builder.semantic_model.get_db();
-    if let Some(type_decl) = db.get_type_index().get_type_decl(type_decl_id) {
-        if let Some(origin) = type_decl.get_alias_origin(db, None) {
-            if let LuaType::DocFunction(f) = origin {
-                return build_doc_function_signature_help(builder, &f, colon_call, current_idx);
-            }
-        }
+    if let Some(type_decl) = db.get_type_index().get_type_decl(type_decl_id)
+        && let Some(LuaType::DocFunction(f)) = type_decl.get_alias_origin(db, None)
+    {
+        let semantic_id = LuaSemanticDeclId::TypeDecl(type_decl_id.clone());
+        let description = db
+            .get_property_index()
+            .get_property(&semantic_id)
+            .and_then(|p| p.description.clone())
+            .map(|description| *description);
+
+        return build_doc_function_signature_help(
+            builder,
+            &f,
+            colon_call,
+            current_idx,
+            description,
+        );
     }
 
     let operator_ids = db
@@ -297,6 +316,7 @@ fn build_type_signature_help(
                     &func_type,
                     colon_call,
                     current_idx,
+                    None,
                 );
             }
             LuaType::Signature(signature_id) => {
@@ -352,7 +372,13 @@ fn build_table_call_signature_help(
     let call_type = operator.get_operator_func(db);
     match call_type {
         LuaType::DocFunction(func_type) => {
-            return build_doc_function_signature_help(builder, &func_type, colon_call, current_idx);
+            return build_doc_function_signature_help(
+                builder,
+                &func_type,
+                colon_call,
+                current_idx,
+                None,
+            );
         }
         LuaType::Signature(signature_id) => {
             return build_sig_id_signature_help(
@@ -380,8 +406,13 @@ fn build_union_type_signature_help(
     for typ in union_types {
         match typ {
             LuaType::DocFunction(func_type) => {
-                let sig =
-                    build_doc_function_signature_help(builder, &func_type, colon_call, current_idx);
+                let sig = build_doc_function_signature_help(
+                    builder,
+                    &func_type,
+                    colon_call,
+                    current_idx,
+                    None,
+                );
 
                 if let Some(sig) = sig {
                     signatures.push(sig.signatures[0].clone());
@@ -437,13 +468,13 @@ pub fn build_function_label(
     if let Some(prefix_name) = &builder.prefix_name {
         label.push_str(prefix_name);
         if is_method {
-            label.push_str(":");
+            label.push(':');
         } else {
-            label.push_str(".");
+            label.push('.');
         }
     }
     label.push_str(&builder.function_name);
-    label.push_str("(");
+    label.push('(');
     label.push_str(
         &param_infos
             .iter()
@@ -454,7 +485,7 @@ pub fn build_function_label(
             .collect::<Vec<_>>()
             .join(", "),
     );
-    label.push_str(")");
+    label.push(')');
     match return_type {
         LuaType::Nil => {}
         _ => {
@@ -536,10 +567,21 @@ fn build_generic_signature_help(
     let type_decl_id = generic.get_base_type_id_ref();
     if let Some(type_decl) = db.get_type_index().get_type_decl(type_decl_id) {
         let substitutor = TypeSubstitutor::from_type_array(generic_params.clone());
-        if let Some(origin) = type_decl.get_alias_origin(db, Some(&substitutor)) {
-            if let LuaType::DocFunction(f) = origin {
-                return build_doc_function_signature_help(builder, &f, colon_call, current_idx);
-            }
+        if let Some(LuaType::DocFunction(f)) = type_decl.get_alias_origin(db, Some(&substitutor)) {
+            let semantic_id = LuaSemanticDeclId::TypeDecl(type_decl_id.clone());
+            let description = db
+                .get_property_index()
+                .get_property(&semantic_id)
+                .and_then(|p| p.description.clone())
+                .map(|description| *description);
+
+            return build_doc_function_signature_help(
+                builder,
+                &f,
+                colon_call,
+                current_idx,
+                description,
+            );
         }
     }
 
@@ -557,6 +599,7 @@ fn build_generic_signature_help(
                     &func_type,
                     colon_call,
                     current_idx,
+                    None,
                 );
             }
             LuaType::Signature(signature_id) => {

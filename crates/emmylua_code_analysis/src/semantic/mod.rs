@@ -1,6 +1,7 @@
 mod cache;
 mod decl;
 mod generic;
+mod guard;
 mod infer;
 mod member;
 mod overload_resolve;
@@ -11,7 +12,7 @@ mod visibility;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 pub use cache::{CacheEntry, CacheOptions, LuaAnalysisPhase, LuaInferCache};
 pub use decl::{enum_variable_is_param, parse_require_module_info};
@@ -40,6 +41,7 @@ pub use visibility::check_export_visibility;
 use visibility::check_visibility;
 
 use crate::semantic::member::find_members_with_key;
+use crate::semantic::type_check::check_type_compact_detail;
 use crate::{Emmyrc, LuaDocument, LuaSemanticDeclId, ModuleInfo, db_index::LuaTypeDeclId};
 use crate::{
     FileId,
@@ -47,6 +49,7 @@ use crate::{
 };
 use crate::{LuaFunctionType, LuaMemberId, LuaMemberKey, LuaTypeOwner};
 pub use generic::*;
+pub use guard::{InferGuard, InferGuardRef};
 pub use infer::InferFailReason;
 pub use infer::infer_param;
 pub(crate) use infer::{infer_call_expr_func, infer_expr};
@@ -85,7 +88,10 @@ impl<'a> SemanticModel<'a> {
     }
 
     pub fn get_document(&'_ self) -> LuaDocument<'_> {
-        self.db.get_vfs().get_document(&self.file_id).unwrap()
+        self.db
+            .get_vfs()
+            .get_document(&self.file_id)
+            .expect("always exists")
     }
 
     pub fn get_module(&self) -> Option<&ModuleInfo> {
@@ -97,7 +103,7 @@ impl<'a> SemanticModel<'a> {
     }
 
     pub fn get_document_by_uri(&'_ self, uri: &Uri) -> Option<LuaDocument<'_>> {
-        let file_id = self.db.get_vfs().get_file_id(&uri)?;
+        let file_id = self.db.get_vfs().get_file_id(uri)?;
         self.db.get_vfs().get_document(&file_id)
     }
 
@@ -150,24 +156,24 @@ impl<'a> SemanticModel<'a> {
         check_type_compact(self.db, source, compact_type)
     }
 
+    pub fn type_check_detail(&self, source: &LuaType, compact_type: &LuaType) -> TypeCheckResult {
+        check_type_compact_detail(self.db, source, compact_type)
+    }
+
     pub fn infer_call_expr_func(
         &self,
         call_expr: LuaCallExpr,
         arg_count: Option<usize>,
     ) -> Option<Arc<LuaFunctionType>> {
         let prefix_expr = call_expr.get_prefix_expr()?;
-        let call_expr_type = infer_expr(
-            self.db,
-            &mut self.infer_cache.borrow_mut(),
-            prefix_expr.into(),
-        )
-        .ok()?;
+        let call_expr_type =
+            infer_expr(self.db, &mut self.infer_cache.borrow_mut(), prefix_expr).ok()?;
         infer_call_expr_func(
             self.db,
             &mut self.infer_cache.borrow_mut(),
             call_expr,
             call_expr_type,
-            &mut InferGuard::new(),
+            &InferGuard::new(),
             arg_count,
         )
         .ok()
@@ -313,28 +319,5 @@ impl<'a> SemanticModel<'a> {
     pub fn get_index_decl_type(&self, index_expr: LuaIndexExpr) -> Option<LuaType> {
         let cache = &mut self.infer_cache.borrow_mut();
         infer_index_expr(self.db, cache, index_expr, false).ok()
-    }
-}
-
-/// Guard to prevent infinite recursion
-/// Some type may reference itself, so we need to check if we have already inferred this type
-#[derive(Debug)]
-pub struct InferGuard {
-    guard: HashSet<LuaTypeDeclId>,
-}
-
-impl InferGuard {
-    pub fn new() -> Self {
-        Self {
-            guard: HashSet::default(),
-        }
-    }
-
-    pub fn check(&mut self, type_id: &LuaTypeDeclId) -> Result<(), InferFailReason> {
-        if self.guard.contains(type_id) {
-            return Err(InferFailReason::RecursiveInfer);
-        }
-        self.guard.insert(type_id.clone());
-        Ok(())
     }
 }

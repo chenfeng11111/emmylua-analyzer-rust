@@ -292,15 +292,14 @@ impl<'a> LuaLexer<'a> {
                     }
                     '=' if self.support_non_std_symbol(LuaNonStdSymbol::SlashAssign) => {
                         self.reader.bump();
-                        return LuaTokenKind::TkSlashAssign;
+                        LuaTokenKind::TkSlashAssign
                     }
-                    _ if current_char != '/' => {
-                        return LuaTokenKind::TkDiv;
-                    }
+                    _ if current_char != '/' => LuaTokenKind::TkDiv,
                     _ if self.support_non_std_symbol(LuaNonStdSymbol::DoubleSlash) => {
                         // "//" is a short comment
                         self.reader.bump();
-                        return LuaTokenKind::TkShortComment;
+                        self.reader.eat_while(|ch| ch != '\n' && ch != '\r');
+                        LuaTokenKind::TkShortComment
                     }
                     _ => {
                         if !self.lexer_config.support_integer_operation() {
@@ -382,10 +381,6 @@ impl<'a> LuaLexer<'a> {
                 LuaTokenKind::TkNot
             }
             '&' => {
-                if !self.lexer_config.support_integer_operation() {
-                    self.error(|| t!("bitwise operation is not supported"));
-                }
-
                 self.reader.bump();
                 if self.reader.current_char() == '&'
                     && self.support_non_std_symbol(LuaNonStdSymbol::DoubleAmp)
@@ -399,13 +394,13 @@ impl<'a> LuaLexer<'a> {
                     self.reader.bump();
                     return LuaTokenKind::TkAmpAssign;
                 }
-                LuaTokenKind::TkBitAnd
-            }
-            '|' => {
+
                 if !self.lexer_config.support_integer_operation() {
                     self.error(|| t!("bitwise operation is not supported"));
                 }
-
+                LuaTokenKind::TkBitAnd
+            }
+            '|' => {
                 self.reader.bump();
                 if self.reader.current_char() == '|'
                     && self.support_non_std_symbol(LuaNonStdSymbol::DoublePipe)
@@ -413,11 +408,16 @@ impl<'a> LuaLexer<'a> {
                     self.reader.bump();
                     return LuaTokenKind::TkOr;
                 }
+
                 if self.reader.current_char() == '='
                     && self.support_non_std_symbol(LuaNonStdSymbol::PipeAssign)
                 {
                     self.reader.bump();
                     return LuaTokenKind::TkPipeAssign;
+                }
+
+                if !self.lexer_config.support_integer_operation() {
+                    self.error(|| t!("bitwise operation is not supported"));
                 }
                 LuaTokenKind::TkBitOr
             }

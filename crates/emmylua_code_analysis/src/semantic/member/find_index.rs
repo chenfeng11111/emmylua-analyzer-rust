@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    DbIndex, InFiled, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaMemberOwner,
-    LuaObjectType, LuaOperatorMetaMethod, LuaOperatorOwner, LuaSemanticDeclId, LuaType,
-    LuaTypeDeclId, LuaUnionType, TypeOps,
+    DbIndex, InFiled, InferGuardRef, LuaGenericType, LuaIntersectionType, LuaMemberKey,
+    LuaMemberOwner, LuaObjectType, LuaOperatorMetaMethod, LuaOperatorOwner, LuaSemanticDeclId,
+    LuaType, LuaTypeDeclId, LuaUnionType, TypeOps,
     semantic::{
         InferGuard,
         generic::{TypeSubstitutor, instantiate_type_generic},
@@ -14,13 +14,13 @@ use super::{FindMembersResult, LuaMemberInfo};
 use rowan::TextRange;
 
 pub fn find_index_operations(db: &DbIndex, prefix_type: &LuaType) -> FindMembersResult {
-    find_index_operations_guard(db, prefix_type, &mut InferGuard::new())
+    find_index_operations_guard(db, prefix_type, &InferGuard::new())
 }
 
 pub fn find_index_operations_guard(
     db: &DbIndex,
     prefix_type: &LuaType,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
 ) -> FindMembersResult {
     match &prefix_type {
         LuaType::TableConst(in_filed) => find_index_table(db, in_filed),
@@ -36,7 +36,7 @@ pub fn find_index_operations_guard(
         LuaType::TableGeneric(table_generic) => find_index_table_generic(db, table_generic),
         LuaType::Instance(inst) => {
             let base = inst.get_base();
-            find_index_operations_guard(db, &base, infer_guard)
+            find_index_operations_guard(db, base, infer_guard)
         }
         _ => None,
     }
@@ -106,11 +106,11 @@ fn find_index_table(db: &DbIndex, table_range: &InFiled<TextRange>) -> FindMembe
 fn find_index_custom_type(
     db: &DbIndex,
     prefix_type_id: &LuaTypeDeclId,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
 ) -> FindMembersResult {
-    infer_guard.check(&prefix_type_id).ok()?;
+    infer_guard.check(prefix_type_id).ok()?;
     let type_index = db.get_type_index();
-    let type_decl = type_index.get_type_decl(&prefix_type_id)?;
+    let type_decl = type_index.get_type_decl(prefix_type_id)?;
 
     if type_decl.is_alias() {
         if let Some(origin_type) = type_decl.get_alias_origin(db, None) {
@@ -143,14 +143,12 @@ fn find_index_custom_type(
     }
 
     // Find index operations in super types
-    if type_decl.is_class() {
-        if let Some(super_types) = type_index.get_super_types(&prefix_type_id) {
-            for super_type in super_types {
-                if let Some(super_members) =
-                    find_index_operations_guard(db, &super_type, infer_guard)
-                {
-                    members.extend(super_members);
-                }
+    if type_decl.is_class()
+        && let Some(super_types) = type_index.get_super_types(prefix_type_id)
+    {
+        for super_type in super_types {
+            if let Some(super_members) = find_index_operations_guard(db, &super_type, infer_guard) {
+                members.extend(super_members);
             }
         }
     }
@@ -217,7 +215,7 @@ fn find_index_object(db: &DbIndex, object: &LuaObjectType) -> FindMembersResult 
 fn find_index_union(
     db: &DbIndex,
     union: &LuaUnionType,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
 ) -> FindMembersResult {
     let mut members = Vec::new();
 
@@ -237,7 +235,7 @@ fn find_index_union(
 fn find_index_intersection(
     db: &DbIndex,
     intersection: &LuaIntersectionType,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
 ) -> FindMembersResult {
     let mut all_members = Vec::new();
 
@@ -248,9 +246,9 @@ fn find_index_intersection(
     }
 
     if all_members.is_empty() {
-        return None;
+        None
     } else if all_members.len() == 1 {
-        return Some(all_members.remove(0));
+        Some(all_members.remove(0))
     } else {
         let mut result = Vec::new();
         let mut member_set = HashSet::new();
@@ -272,14 +270,14 @@ fn find_index_intersection(
             });
         }
 
-        return Some(result);
+        Some(result)
     }
 }
 
 fn find_index_generic(
     db: &DbIndex,
     generic: &LuaGenericType,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
 ) -> FindMembersResult {
     let base_type = generic.get_base_type();
     let type_decl_id = if let LuaType::Ref(id) = base_type {
@@ -349,7 +347,7 @@ fn find_index_generic(
 }
 
 #[allow(unused)]
-fn find_index_table_generic(db: &DbIndex, table_params: &Vec<LuaType>) -> FindMembersResult {
+fn find_index_table_generic(db: &DbIndex, table_params: &[LuaType]) -> FindMembersResult {
     if table_params.len() != 2 {
         return None;
     }

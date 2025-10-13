@@ -3,11 +3,15 @@ use emmylua_code_analysis::{
 };
 use fern::Dispatch;
 use log::LevelFilter;
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
-fn root_from_configs(config_paths: &Vec<PathBuf>, fallback: &PathBuf) -> PathBuf {
+fn root_from_configs(config_paths: &[PathBuf], fallback: &Path) -> PathBuf {
     if config_paths.len() != 1 {
-        fallback.clone()
+        fallback.to_path_buf()
     } else {
         let config_path = &config_paths[0];
         // Need to convert to canonical path to ensure parent() is not an empty
@@ -20,7 +24,7 @@ fn root_from_configs(config_paths: &Vec<PathBuf>, fallback: &PathBuf) -> PathBuf
                     config_path,
                     err
                 );
-                fallback.clone()
+                fallback.to_path_buf()
             }
         }
     }
@@ -160,10 +164,10 @@ pub fn collect_files(
     files
 }
 
-pub fn calculate_include_and_exclude(
-    emmyrc: &Emmyrc,
-    ignore: Option<Vec<String>>,
-) -> (Vec<String>, Vec<String>, Vec<PathBuf>) {
+/// File patterns for workspace scanning: (include_patterns, exclude_patterns, exclude_dirs)
+type FilePatterns = (Vec<String>, Vec<String>, Vec<PathBuf>);
+
+pub fn calculate_include_and_exclude(emmyrc: &Emmyrc, ignore: Option<Vec<String>>) -> FilePatterns {
     let mut include = vec!["**/*.lua".to_string(), "**/.editorconfig".to_string()];
     let mut exclude = Vec::new();
     let mut exclude_dirs = Vec::new();

@@ -56,7 +56,15 @@ fn build_hover_without_property(
     token: LuaSyntaxToken,
     typ: LuaType,
 ) -> Option<Hover> {
-    let hover = humanize_type(db, &typ, RenderLevel::Detailed);
+    let render_level = db
+        .get_emmyrc()
+        .hover
+        .custom_detail
+        .map_or(RenderLevel::Detailed, |custom_detail| {
+            RenderLevel::CustomDetailed(custom_detail)
+        });
+
+    let hover = humanize_type(db, &typ, render_level);
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: lsp_types::MarkupKind::Markdown,
@@ -128,8 +136,8 @@ fn build_decl_hover(
     let decl = db.get_decl_index().get_decl(&decl_id)?;
 
     let mut semantic_decls =
-        find_decl_origin_owners(builder.compilation, &builder.semantic_model, decl_id)
-            .get_types(&builder.semantic_model);
+        find_decl_origin_owners(builder.compilation, builder.semantic_model, decl_id)
+            .get_types(builder.semantic_model);
     replace_semantic_type(&mut semantic_decls, &typ);
     // 处理类型签名
     if is_function(&typ) {
@@ -177,7 +185,7 @@ fn build_decl_hover(
             let decl_hover_type =
                 get_hover_type(builder, builder.semantic_model).unwrap_or(typ.clone());
             let type_humanize_text =
-                hover_humanize_type(builder, &decl_hover_type, Some(RenderLevel::Detailed));
+                hover_humanize_type(builder, &decl_hover_type, Some(builder.detail_render_level));
             let prefix = if decl.is_local() {
                 "local "
             } else {
@@ -197,7 +205,7 @@ fn build_decl_hover(
         semantic_decl_set.insert(&decl_decl);
         semantic_decl_set.extend(semantic_decls.iter().map(|(decl, _)| decl));
         for semantic_decl in semantic_decl_set {
-            builder.add_description(&semantic_decl);
+            builder.add_description(semantic_decl);
         }
     }
 
@@ -211,13 +219,9 @@ fn build_member_hover(
     member_id: LuaMemberId,
 ) -> Option<()> {
     let member = db.get_member_index().get_member(&member_id)?;
-    let mut semantic_decls = find_member_origin_owners(
-        builder.compilation,
-        &builder.semantic_model,
-        member_id,
-        true,
-    )
-    .get_types(&builder.semantic_model);
+    let mut semantic_decls =
+        find_member_origin_owners(builder.compilation, builder.semantic_model, member_id, true)
+            .get_types(builder.semantic_model);
 
     replace_semantic_type(&mut semantic_decls, &typ);
     let member_name = match member.get_key() {
@@ -247,7 +251,7 @@ fn build_member_hover(
 
         hover_function_type(builder, db, &semantic_decls);
 
-        builder.set_location_path(Some(&member));
+        builder.set_location_path(Some(member));
 
         // `typ`此时可能是泛型实例化后的类型, 所以我们需要从member获取原始类型
         builder.add_signature_params_rets_description(
@@ -257,7 +261,7 @@ fn build_member_hover(
         if typ.is_const() {
             let const_value = hover_const_type(db, &typ);
             builder.set_type_description(format!("(field) {}: {}", member_name, const_value));
-            builder.set_location_path(Some(&member));
+            builder.set_location_path(Some(member));
         } else {
             let member_hover_type =
                 get_hover_type(builder, builder.semantic_model).unwrap_or(typ.clone());
@@ -265,7 +269,7 @@ fn build_member_hover(
                 hover_humanize_type(builder, &member_hover_type, Some(RenderLevel::Simple));
             builder
                 .set_type_description(format!("(field) {}: {}", member_name, type_humanize_text));
-            builder.set_location_path(Some(&member));
+            builder.set_location_path(Some(member));
         }
 
         // 添加注释文本
@@ -289,7 +293,7 @@ fn build_type_decl_hover(
     let type_decl = db.get_type_index().get_type_decl(&type_decl_id)?;
     let type_description = if type_decl.is_alias() {
         if let Some(origin) = type_decl.get_alias_origin(db, None) {
-            let origin_type = humanize_type(db, &origin, RenderLevel::Detailed);
+            let origin_type = humanize_type(db, &origin, builder.detail_render_level);
             format!("(alias) {} = {}", type_decl.get_name(), origin_type)
         } else {
             "".to_string()
@@ -300,7 +304,7 @@ fn build_type_decl_hover(
         let humanize_text = humanize_type(
             db,
             &LuaType::Def(type_decl_id.clone()),
-            RenderLevel::Detailed,
+            builder.detail_render_level,
         );
         format!("(class) {}", humanize_text)
     };
@@ -385,7 +389,7 @@ pub fn get_hover_type(builder: &HoverBuilder, semantic_model: &SemanticModel) ->
             match expr_type {
                 Ok(expr_type) => match expr_type {
                     LuaType::Variadic(muli_return) => {
-                        return muli_return.get_type(multi_return_index).map(|t| t.clone());
+                        return muli_return.get_type(multi_return_index).cloned();
                     }
                     _ => return Some(expr_type),
                 },

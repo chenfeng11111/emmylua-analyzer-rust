@@ -4,6 +4,48 @@
 
 ---
 
+## [0.15.0] - 2025-10-10
+
+### ✨ Added
+- **Use Clippy as linter**: core codebase now uses Clippy as the linter, improving code quality and consistency.
+- **Support `textdocument/diagnostic`**: Added support for the `textDocument/diagnostic` request, allowing clients to fetch diagnostics for a specific document.
+- **Support annotation `@readonly`**: You can now use the `@readonly` annotation to mark fields as read-only. For example:
+```lua
+---@readonly
+local myVar = 42
+```
+- **Add check for `global in non module`**: Added a new diagnostic to check for global variable declarations in non-module scope. This helps detect unintended global variable declarations.
+
+### 🔧 Changed
+- **Optimize semantic token**: Optimized semantic token handling for delimiter symbols.
+
+### 🐛 Fixed
+- **Fix generic pattern matching issue**: Fixed an issue where generic pattern matching aliases could lead to incorrect type inference.
+
+## [0.14.0] - 2025-9-19
+
+### 🔧 Changed
+
+- **Parser Optimization**: The parser now reports syntax errors more accurately and has improved error recovery.
+- **@type Support for Return Statements**: You can now use `@type` above a return statement to specify the return value type, for example:
+```lua
+---@return vim.lsp.Config
+return {}
+```
+- **Type Checking Optimization**: Improved type checking algorithms for better performance.
+
+### ✨ Added
+- **SARIF Format for emmyLua_check**: `emmyLua_check` now supports SARIF format output, enabled via the `--format sarif` command line option.
+- **Generic List Supports T... Syntax**: Generic lists now support the `T...` syntax, for example:
+```lua
+---@alias MyTuple<T...> [T...]
+```
+
+### 🐛 Fixed
+- **Fix create progress**: Fixed an issue with the `window/workDoneProgress/create` protocol; it must be sent as a request, not a notification.
+- **Fix Function Overload Algorithm**: Rewrote the function overload algorithm to better handle variadic function parameters.
+
+
 ## [0.13.0] - 2025-9-9
 
 ### 🐛 Fixed

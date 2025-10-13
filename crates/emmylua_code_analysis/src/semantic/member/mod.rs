@@ -23,9 +23,10 @@ use super::{
 
 pub fn get_buildin_type_map_type_id(type_: &LuaType) -> Option<LuaTypeDeclId> {
     match type_ {
-        LuaType::String | LuaType::StringConst(_) | LuaType::DocStringConst(_) => {
-            Some(LuaTypeDeclId::new("string"))
-        }
+        LuaType::String
+        | LuaType::StringConst(_)
+        | LuaType::DocStringConst(_)
+        | LuaType::Language(_) => Some(LuaTypeDeclId::new("string")),
         LuaType::Io => Some(LuaTypeDeclId::new("io")),
         _ => None,
     }
@@ -60,7 +61,7 @@ pub fn find_member_origin_owner(
             break;
         }
 
-        visited_members.insert(current_member_id.clone());
+        visited_members.insert(*current_member_id);
         iteration_count += 1;
 
         match resolve_member_owner(db, infer_config, current_member_id) {

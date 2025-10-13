@@ -1,6 +1,6 @@
 [package]
 name = "emmylua_parser_desc"
-version = "0.15.0"
+version = "0.17.0"
 edition = "2024"
 authors = ["CppCXY", "taminomara"]
 description = "A parser for markup within Lua comments"
@@ -9,6 +9,10 @@ repository = "https://github.com/CppCXY/emmylua-analyzer-rust"
 readme = "README.md"
 keywords = ["emmylua", "luals", "parser", "lua"]
 categories = ["development-tools", "parsing"]
+
+# Inherit workspace lints configuration
+[lints]
+workspace = true
 
 [dependencies]
 # local

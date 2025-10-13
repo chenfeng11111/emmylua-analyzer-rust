@@ -11,12 +11,15 @@ use super::{
     },
     InferFailReason, InferResult,
 };
-use crate::semantic::{
-    generic::instantiate_doc_function, infer::narrow::get_type_at_call_expr_inline_cast,
-};
 use crate::{
     CacheEntry, DbIndex, InFiled, LuaFunctionType, LuaGenericType, LuaInstanceType,
     LuaOperatorMetaMethod, LuaOperatorOwner, LuaSignatureId, LuaType, LuaTypeDeclId, LuaUnionType,
+};
+use crate::{
+    InferGuardRef,
+    semantic::{
+        generic::instantiate_doc_function, infer::narrow::get_type_at_call_expr_inline_cast,
+    },
 };
 use crate::{build_self_type, infer_self_type, semantic::infer_expr};
 use infer_require::infer_require_call;
@@ -32,31 +35,26 @@ pub fn infer_call_expr_func(
     cache: &mut LuaInferCache,
     call_expr: LuaCallExpr,
     call_expr_type: LuaType,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
     args_count: Option<usize>,
 ) -> InferCallFuncResult {
     let syntax_id = call_expr.get_syntax_id();
     let key = (syntax_id, args_count, call_expr_type.clone());
-    match cache.call_cache.get(&key) {
-        Some(cache) => match cache {
+    if let Some(cache) = cache.call_cache.get(&key) {
+        match cache {
             CacheEntry::Cache(ty) => return Ok(ty.clone()),
             _ => return Err(InferFailReason::RecursiveInfer),
-        },
-        None => {}
+        }
     }
 
     cache.call_cache.insert(key.clone(), CacheEntry::Ready);
     let result = match &call_expr_type {
         LuaType::DocFunction(func) => {
-            infer_doc_function(db, cache, &func, call_expr.clone(), args_count)
+            infer_doc_function(db, cache, func, call_expr.clone(), args_count)
         }
-        LuaType::Signature(signature_id) => infer_signature_doc_function(
-            db,
-            cache,
-            signature_id.clone(),
-            call_expr.clone(),
-            args_count,
-        ),
+        LuaType::Signature(signature_id) => {
+            infer_signature_doc_function(db, cache, *signature_id, call_expr.clone(), args_count)
+        }
         LuaType::Def(type_def_id) => infer_type_doc_function(
             db,
             cache,
@@ -78,19 +76,12 @@ pub fn infer_call_expr_func(
         LuaType::Generic(generic) => infer_generic_type_doc_function(
             db,
             cache,
-            &generic,
+            generic,
             call_expr.clone(),
             infer_guard,
             args_count,
         ),
-        LuaType::Instance(inst) => infer_instance_type_doc_function(
-            db,
-            cache,
-            &inst,
-            call_expr.clone(),
-            infer_guard,
-            args_count,
-        ),
+        LuaType::Instance(inst) => infer_instance_type_doc_function(db, inst),
         LuaType::TableConst(meta_table) => infer_table_type_doc_function(db, meta_table.clone()),
         LuaType::Union(union) => {
             // 此时我们将其视为泛型实例化联合体
@@ -99,9 +90,9 @@ pub fn infer_call_expr_func(
                 .iter()
                 .all(|t| matches!(t, LuaType::DocFunction(_)))
             {
-                infer_generic_doc_function_union(db, cache, &union, call_expr.clone(), args_count)
+                infer_generic_doc_function_union(db, cache, union, call_expr.clone(), args_count)
             } else {
-                infer_union(db, cache, &union, call_expr.clone(), args_count)
+                infer_union(db, cache, union, call_expr.clone(), args_count)
             }
         }
         LuaType::ConstructorFunction(func) => {
@@ -156,7 +147,7 @@ fn infer_doc_function(
         return Ok(Arc::new(result));
     }
 
-    return Ok(func.clone().into());
+    Ok(func.clone().into())
 }
 
 fn infer_generic_doc_function_union(
@@ -232,7 +223,7 @@ fn infer_type_doc_function(
     type_id: LuaTypeDeclId,
     call_expr: LuaCallExpr,
     call_expr_type: &LuaType,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
     args_count: Option<usize>,
 ) -> InferCallFuncResult {
     infer_guard.check(&type_id)?;
@@ -303,7 +294,7 @@ fn infer_generic_type_doc_function(
     cache: &mut LuaInferCache,
     generic: &LuaGenericType,
     call_expr: LuaCallExpr,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuardRef,
     args_count: Option<usize>,
 ) -> InferCallFuncResult {
     let type_id = generic.get_base_type_id();
@@ -362,7 +353,7 @@ fn infer_generic_type_doc_function(
                 if let LuaType::DocFunction(f) = new_f {
                     overloads.push(f.clone());
                 }
-                // todo: support oveload?
+                // todo: support overload?
             }
             _ => {}
         }
@@ -373,24 +364,13 @@ fn infer_generic_type_doc_function(
 
 fn infer_instance_type_doc_function(
     db: &DbIndex,
-    cache: &mut LuaInferCache,
     instance: &LuaInstanceType,
-    call_expr: LuaCallExpr,
-    infer_guard: &mut InferGuard,
-    args_count: Option<usize>,
 ) -> InferCallFuncResult {
     let base = instance.get_base();
     let base_table = match &base {
         LuaType::TableConst(meta_table) => meta_table.clone(),
         LuaType::Instance(inst) => {
-            return infer_instance_type_doc_function(
-                db,
-                cache,
-                inst,
-                call_expr,
-                infer_guard,
-                args_count,
-            );
+            return infer_instance_type_doc_function(db, inst);
         }
         _ => return Err(InferFailReason::None),
     };
@@ -420,7 +400,7 @@ fn infer_table_type_doc_function(db: &DbIndex, table: InFiled<TextRange>) -> Inf
         let func = operator.get_operator_func(db);
         match func {
             LuaType::DocFunction(func) => {
-                return Ok(func.into());
+                return Ok(func);
             }
             LuaType::Signature(signature_id) => {
                 let signature = db
@@ -431,7 +411,7 @@ fn infer_table_type_doc_function(db: &DbIndex, table: InFiled<TextRange>) -> Inf
                     return Err(InferFailReason::UnResolveSignatureReturn(signature_id));
                 }
 
-                return Ok(signature.to_call_operator_func_type().into());
+                return Ok(signature.to_call_operator_func_type());
             }
             _ => {}
         }
@@ -591,7 +571,7 @@ fn is_need_wrap_instance(
         return true;
     }
 
-    return !call_expr.get_range().contains(inst.value.start());
+    !call_expr.get_range().contains(inst.value.start())
 }
 
 fn is_last_call_expr(call_expr: &LuaCallExpr) -> bool {
@@ -637,25 +617,18 @@ pub fn infer_call_expr(
         cache,
         call_expr.clone(),
         prefix_type,
-        &mut InferGuard::new(),
+        &InferGuard::new(),
         None,
     )?
     .get_ret()
     .clone();
 
-    if let Some(tree) = db.get_flow_index().get_flow_tree(&cache.get_file_id()) {
-        if let Some(flow_id) = tree.get_flow_id(call_expr.get_syntax_id()) {
-            if let Some(flow_ret_type) = get_type_at_call_expr_inline_cast(
-                db,
-                cache,
-                tree,
-                call_expr,
-                flow_id,
-                ret_type.clone(),
-            ) {
-                return Ok(flow_ret_type);
-            }
-        }
+    if let Some(tree) = db.get_flow_index().get_flow_tree(&cache.get_file_id())
+        && let Some(flow_id) = tree.get_flow_id(call_expr.get_syntax_id())
+        && let Some(flow_ret_type) =
+            get_type_at_call_expr_inline_cast(db, cache, tree, call_expr, flow_id, ret_type.clone())
+    {
+        return Ok(flow_ret_type);
     }
 
     Ok(ret_type)

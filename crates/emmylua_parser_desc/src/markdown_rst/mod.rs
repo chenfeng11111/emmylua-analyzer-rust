@@ -347,18 +347,17 @@ impl MarkdownRstParser {
             return Err(());
         }
 
-        if let Some(next_line) = next_line {
-            if !(is_ws(next_line.current_char())
+        if let Some(next_line) = next_line
+            && !(is_ws(next_line.current_char())
                 || next_line.is_eof()
                 || Self::is_list_start(
                     next_line.tail_text(),
                     list_enumerator_kind,
                     list_marker_kind,
                 ))
-            {
-                bt.rollback(self, line);
-                return Err(());
-            }
+        {
+            bt.rollback(self, line);
+            return Err(());
         }
 
         self.emit(line, DescItemKind::Markup);
@@ -439,9 +438,7 @@ impl MarkdownRstParser {
         line.eat_till_end();
         self.emit(line, DescItemKind::CodeBlock);
 
-        for i in start + 1..lines.len() {
-            let line = &mut lines[i];
-
+        for (i, line) in lines.iter_mut().enumerate().skip(start + 1) {
             if is_blank(line.tail_text()) {
                 line.eat_till_end();
                 line.reset_buff();
@@ -770,8 +767,8 @@ impl MarkdownRstParser {
         }
 
         let mut line_ending = LineEnding::Normal;
-        for i in start..end {
-            line_ending = self.process_inline_content(&mut lines[i]);
+        for line in lines.iter_mut().take(end).skip(start) {
+            line_ending = self.process_inline_content(line);
         }
 
         (end, line_ending)
@@ -785,8 +782,7 @@ impl MarkdownRstParser {
     ) -> usize {
         let mut end = start;
         let mut common_indent = None;
-        for i in start..lines.len() {
-            let line = &lines[i];
+        for (i, line) in lines.iter().enumerate().skip(start) {
             let indent = line.tail_text().chars().take_while(|c| is_ws(*c)).count();
             if indent >= 1 {
                 end = i + 1;
@@ -816,8 +812,7 @@ impl MarkdownRstParser {
         allow_blank_lines: bool,
     ) -> usize {
         let mut end = start;
-        for i in start..lines.len() {
-            let line = &mut lines[i];
+        for (i, line) in lines.iter_mut().enumerate().skip(start) {
             let indent = line.tail_text().chars().take_while(|c| is_ws(*c)).count();
             if indent >= min_indent {
                 end = i + 1;
@@ -832,8 +827,7 @@ impl MarkdownRstParser {
 
     fn gather_prefixed_lines(&mut self, lines: &mut [Reader], start: usize, prefix: char) -> usize {
         let mut end = start;
-        for i in start..lines.len() {
-            let line = &mut lines[i];
+        for (i, line) in lines.iter_mut().enumerate().skip(start) {
             if line.current_char() == prefix {
                 end = i + 1;
                 line.bump();
@@ -1307,11 +1301,11 @@ impl MarkdownRstParser {
             }
         }
 
-        if let Some(cursor_position) = cursor_position {
-            if reader.current_range().contains_inclusive(cursor_position) {
-                process_lua_ref(self, reader.reset_buff_into_sub_reader());
-                return true;
-            }
+        if let Some(cursor_position) = cursor_position
+            && reader.current_range().contains_inclusive(cursor_position)
+        {
+            process_lua_ref(self, reader.reset_buff_into_sub_reader());
+            return true;
         }
 
         false

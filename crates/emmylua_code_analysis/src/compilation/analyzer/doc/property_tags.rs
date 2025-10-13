@@ -1,6 +1,6 @@
 use crate::{
     AsyncState, LuaDeclId, LuaExport, LuaExportScope, LuaNoDiscard, LuaSemanticDeclId,
-    LuaSignatureId,
+    LuaSignatureId, PropertyDeclFeature,
 };
 
 use super::{
@@ -10,8 +10,8 @@ use super::{
 use crate::compilation::analyzer::doc::tags::report_orphan_tag;
 use emmylua_parser::{
     LuaAst, LuaAstNode, LuaDocDescriptionOwner, LuaDocTagAsync, LuaDocTagDeprecated,
-    LuaDocTagExport, LuaDocTagNodiscard, LuaDocTagSource, LuaDocTagVersion, LuaDocTagVisibility,
-    LuaTableExpr,
+    LuaDocTagExport, LuaDocTagNodiscard, LuaDocTagReadonly, LuaDocTagSource, LuaDocTagVersion,
+    LuaDocTagVisibility, LuaTableExpr,
 };
 
 pub fn analyze_visibility(
@@ -70,11 +70,9 @@ pub fn analyze_nodiscard(analyzer: &mut DocAnalyzer, nodiscard: LuaDocTagNodisca
 }
 
 pub fn analyze_deprecated(analyzer: &mut DocAnalyzer, tag: LuaDocTagDeprecated) -> Option<()> {
-    let message = if let Some(desc) = tag.get_description() {
-        Some(desc.get_description_text().to_string())
-    } else {
-        None
-    };
+    let message = tag
+        .get_description()
+        .map(|desc| desc.get_description_text().to_string());
     let owner_id = get_owner_id_or_report(analyzer, &tag)?;
 
     analyzer
@@ -150,6 +148,18 @@ pub fn analyze_export(analyzer: &mut DocAnalyzer, tag: LuaDocTagExport) -> Optio
         .db
         .get_property_index_mut()
         .add_export(analyzer.file_id, owner_id, export);
+
+    Some(())
+}
+
+pub fn analyze_readonly(analyzer: &mut DocAnalyzer, readonly: LuaDocTagReadonly) -> Option<()> {
+    let owner_id = get_owner_id_or_report(analyzer, &readonly)?;
+
+    analyzer.db.get_property_index_mut().add_decl_feature(
+        analyzer.file_id,
+        owner_id,
+        PropertyDeclFeature::ReadOnly,
+    );
 
     Some(())
 }

@@ -1,6 +1,6 @@
 [package]
 name = "emmylua_ls"
-version = "0.13.0"
+version = "0.15.0"
 edition = "2024"
 authors = ["CppCXY"]
 description = "A language server for emmylua."
@@ -9,6 +9,10 @@ repository = "https://github.com/CppCXY/emmylua-analyzer-rust"
 readme = "README.md"
 keywords = ["emmylua", "doc", "lua"]
 categories = ["development-tools"]
+
+# Inherit workspace lints configuration
+[lints]
+workspace = true
 
 [dependencies]
 # local

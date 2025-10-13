@@ -5,6 +5,7 @@ mod command;
 mod completion;
 mod configuration;
 mod definition;
+mod diagnostic;
 mod document_color;
 mod document_formatting;
 mod document_highlight;
@@ -94,4 +95,5 @@ capabilities!(modules: {
     configuration => ConfigurationCapabilities,
     call_hierarchy => CallHierarchyCapabilities,
     workspace => WorkspaceCapabilities,
+    diagnostic => DiagnosticCapabilities,
 });

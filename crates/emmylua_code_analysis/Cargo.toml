@@ -1,6 +1,6 @@
 [package]
 name = "emmylua_code_analysis"
-version = "0.13.0"
+version = "0.15.0"
 edition = "2024"
 authors = ["CppCXY"]
 description = "A library for analyzing lua code."
@@ -14,6 +14,10 @@ include = [
     "src/**",
     "resources/**",
 ]
+
+# Inherit workspace lints configuration
+[lints]
+workspace = true
 
 [dependencies]
 # local

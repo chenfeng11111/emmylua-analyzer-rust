@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, Ordering};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use super::{ClientProxy, FileDiagnostic, StatusBar};
+use crate::context::lsp_features::LspFeatures;
 use crate::handlers::{ClientConfig, init_analysis};
-use dirs;
 use emmylua_code_analysis::{EmmyLuaAnalysis, Emmyrc, load_configs};
 use emmylua_code_analysis::{update_code_style, uri_to_file_path};
 use log::{debug, info};
@@ -16,18 +16,19 @@ use wax::Pattern;
 
 pub struct WorkspaceManager {
     analysis: Arc<RwLock<EmmyLuaAnalysis>>,
-    #[allow(unused)]
     client: Arc<ClientProxy>,
     status_bar: Arc<StatusBar>,
     update_token: Arc<Mutex<Option<Arc<ReindexToken>>>>,
     file_diagnostic: Arc<FileDiagnostic>,
+    lsp_features: Arc<LspFeatures>,
     pub client_config: ClientConfig,
     pub workspace_folders: Vec<PathBuf>,
     pub watcher: Option<notify::RecommendedWatcher>,
     pub current_open_files: HashSet<Uri>,
     pub match_file_pattern: WorkspaceFileMatcher,
-    // 原子变量
     pub workspace_initialized: Arc<AtomicBool>,
+    workspace_diagnostic_level: Arc<AtomicU8>,
+    workspace_version: Arc<AtomicI64>,
 }
 
 impl WorkspaceManager {
@@ -36,6 +37,7 @@ impl WorkspaceManager {
         client: Arc<ClientProxy>,
         status_bar: Arc<StatusBar>,
         file_diagnostic: Arc<FileDiagnostic>,
+        lsp_features: Arc<LspFeatures>,
     ) -> Self {
         Self {
             analysis,
@@ -45,10 +47,15 @@ impl WorkspaceManager {
             workspace_folders: Vec::new(),
             update_token: Arc::new(Mutex::new(None)),
             file_diagnostic,
+            lsp_features,
             watcher: None,
             current_open_files: HashSet::new(),
             match_file_pattern: WorkspaceFileMatcher::default(),
             workspace_initialized: Arc::new(AtomicBool::new(false)),
+            workspace_diagnostic_level: Arc::new(AtomicU8::new(
+                WorkspaceDiagnosticLevel::Fast.to_u8(),
+            )),
+            workspace_version: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -60,6 +67,23 @@ impl WorkspaceManager {
     pub fn set_workspace_initialized(&self) {
         self.workspace_initialized
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn get_workspace_diagnostic_level(&self) -> WorkspaceDiagnosticLevel {
+        let value = self.workspace_diagnostic_level.load(Ordering::Acquire);
+        WorkspaceDiagnosticLevel::from_u8(value)
+    }
+
+    pub fn update_workspace_version(&self, level: WorkspaceDiagnosticLevel, add_version: bool) {
+        self.workspace_diagnostic_level
+            .store(level.to_u8(), Ordering::Release);
+        if add_version {
+            self.workspace_version.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    pub fn get_workspace_version(&self) -> i64 {
+        self.workspace_version.load(Ordering::Acquire)
     }
 
     pub async fn add_update_emmyrc_task(&self, file_dir: PathBuf) {
@@ -79,6 +103,7 @@ impl WorkspaceManager {
         let client_config = self.client_config.clone();
         let status_bar = self.status_bar.clone();
         let file_diagnostic = self.file_diagnostic.clone();
+        let lsp_features = self.lsp_features.clone();
         tokio::spawn(async move {
             cancel_token.wait_for_reindex().await;
             if cancel_token.is_cancelled() {
@@ -90,6 +115,7 @@ impl WorkspaceManager {
                 &analysis,
                 &status_bar,
                 &file_diagnostic,
+                &lsp_features,
                 workspace_folders,
                 emmyrc,
             )
@@ -114,20 +140,19 @@ impl WorkspaceManager {
     }
 
     pub async fn reload_workspace(&self) -> Option<()> {
-        let config_root: Option<PathBuf> = match self.workspace_folders.first() {
-            Some(root) => Some(PathBuf::from(root)),
-            None => None,
-        };
+        let config_root: Option<PathBuf> = self.workspace_folders.first().map(PathBuf::from);
 
         let emmyrc = load_emmy_config(config_root, self.client_config.clone());
         let analysis = self.analysis.clone();
         let workspace_folders = self.workspace_folders.clone();
         let status_bar = self.status_bar.clone();
         let file_diagnostic = self.file_diagnostic.clone();
+        let lsp_features = self.lsp_features.clone();
         init_analysis(
             &analysis,
             &status_bar,
             &file_diagnostic,
+            &lsp_features,
             workspace_folders,
             emmyrc,
         )
@@ -158,6 +183,9 @@ impl WorkspaceManager {
         drop(update_token);
         let analysis = self.analysis.clone();
         let file_diagnostic = self.file_diagnostic.clone();
+        let lsp_features = self.lsp_features.clone();
+        let client = self.client.clone();
+        let workspace_diagnostic_status = self.workspace_diagnostic_level.clone();
         tokio::spawn(async move {
             cancel_token.wait_for_reindex().await;
             if cancel_token.is_cancelled() {
@@ -170,9 +198,17 @@ impl WorkspaceManager {
             analysis.cleanup_nonexistent_files();
 
             analysis.reindex();
-            file_diagnostic
-                .add_workspace_diagnostic_task(500, true)
-                .await;
+            file_diagnostic.cancel_workspace_diagnostic().await;
+            workspace_diagnostic_status
+                .store(WorkspaceDiagnosticLevel::Fast.to_u8(), Ordering::Release);
+
+            if lsp_features.supports_workspace_diagnostic() {
+                client.refresh_workspace_diagnostics();
+            } else {
+                file_diagnostic
+                    .add_workspace_diagnostic_task(500, true)
+                    .await;
+            }
         });
 
         Some(())
@@ -183,7 +219,7 @@ impl WorkspaceManager {
             return true;
         }
 
-        let Some(file_path) = uri_to_file_path(&uri) else {
+        let Some(file_path) = uri_to_file_path(uri) else {
             return true;
         };
 
@@ -217,38 +253,32 @@ pub fn load_emmy_config(config_root: Option<PathBuf>, client_config: ClientConfi
     let mut config_files = Vec::new();
 
     let home_dir = dirs::home_dir();
-    match home_dir {
-        Some(home_dir) => {
-            let global_luarc_path = home_dir.join(luarc_file);
-            if global_luarc_path.exists() {
-                info!("load config from: {:?}", global_luarc_path);
-                config_files.push(global_luarc_path);
-            }
-            let global_emmyrc_path = home_dir.join(emmyrc_file);
-            if global_emmyrc_path.exists() {
-                info!("load config from: {:?}", global_emmyrc_path);
-                config_files.push(global_emmyrc_path);
-            }
+    if let Some(home_dir) = home_dir {
+        let global_luarc_path = home_dir.join(luarc_file);
+        if global_luarc_path.exists() {
+            info!("load config from: {:?}", global_luarc_path);
+            config_files.push(global_luarc_path);
         }
-        None => {}
+        let global_emmyrc_path = home_dir.join(emmyrc_file);
+        if global_emmyrc_path.exists() {
+            info!("load config from: {:?}", global_emmyrc_path);
+            config_files.push(global_emmyrc_path);
+        }
     };
 
     let emmylua_config_dir = "emmylua_ls";
     let config_dir = dirs::config_dir().map(|path| path.join(emmylua_config_dir));
-    match config_dir {
-        Some(config_dir) => {
-            let global_luarc_path = config_dir.join(luarc_file);
-            if global_luarc_path.exists() {
-                info!("load config from: {:?}", global_luarc_path);
-                config_files.push(global_luarc_path);
-            }
-            let global_emmyrc_path = config_dir.join(emmyrc_file);
-            if global_emmyrc_path.exists() {
-                info!("load config from: {:?}", global_emmyrc_path);
-                config_files.push(global_emmyrc_path);
-            }
+    if let Some(config_dir) = config_dir {
+        let global_luarc_path = config_dir.join(luarc_file);
+        if global_luarc_path.exists() {
+            info!("load config from: {:?}", global_luarc_path);
+            config_files.push(global_luarc_path);
         }
-        None => {}
+        let global_emmyrc_path = config_dir.join(emmyrc_file);
+        if global_emmyrc_path.exists() {
+            info!("load config from: {:?}", global_emmyrc_path);
+            config_files.push(global_emmyrc_path);
+        }
     };
 
     std::env::var("EMMYLUALS_CONFIG")
@@ -381,7 +411,7 @@ impl WorkspaceFileMatcher {
             log::error!("Invalid include pattern");
         }
 
-        return true;
+        true
     }
 }
 
@@ -389,5 +419,27 @@ impl Default for WorkspaceFileMatcher {
     fn default() -> Self {
         let include_pattern = vec!["**/*.lua".to_string()];
         Self::new(include_pattern, vec![], vec![])
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceDiagnosticLevel {
+    None = 0,
+    Fast = 1,
+    Slow = 2,
+}
+
+impl WorkspaceDiagnosticLevel {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Fast,
+            2 => Self::Slow,
+            _ => Self::None,
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        self as u8
     }
 }

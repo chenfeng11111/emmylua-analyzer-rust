@@ -11,7 +11,10 @@ use lsp_types::{
     SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
     SemanticTokensServerCapabilities, ServerCapabilities,
 };
-pub use semantic_token_builder::{SEMANTIC_TOKEN_MODIFIERS, SEMANTIC_TOKEN_TYPES};
+#[allow(unused)]
+pub use semantic_token_builder::{
+    CustomSemanticTokenType, SEMANTIC_TOKEN_MODIFIERS, SEMANTIC_TOKEN_TYPES,
+};
 use tokio_util::sync::CancellationToken;
 
 use super::RegisterCapabilities;
@@ -32,7 +35,7 @@ pub async fn on_semantic_token_handler(
     semantic_token(
         &analysis,
         file_id,
-        &context.client_capabilities(),
+        context.lsp_features().supports_multiline_tokens(),
         client_id,
     )
 }
@@ -40,7 +43,7 @@ pub async fn on_semantic_token_handler(
 pub fn semantic_token(
     analysis: &EmmyLuaAnalysis,
     file_id: FileId,
-    client_capabilities: &ClientCapabilities,
+    supports_multiline_tokens: bool,
     client_id: ClientId,
 ) -> Option<SemanticTokensResult> {
     let semantic_model = analysis.compilation.get_semantic_model(file_id)?;
@@ -51,7 +54,7 @@ pub fn semantic_token(
 
     let result = build_semantic_tokens(
         &semantic_model,
-        supports_multiline_tokens(client_capabilities),
+        supports_multiline_tokens,
         client_id,
         emmyrc,
     )?;
@@ -72,24 +75,12 @@ impl RegisterCapabilities for SemanticTokenCapabilities {
         server_capabilities.semantic_tokens_provider = Some(
             SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
                 legend: SemanticTokensLegend {
-                    token_modifiers: SEMANTIC_TOKEN_MODIFIERS.iter().cloned().collect(),
-                    token_types: SEMANTIC_TOKEN_TYPES.iter().cloned().collect(),
+                    token_modifiers: SEMANTIC_TOKEN_MODIFIERS.to_vec(),
+                    token_types: SEMANTIC_TOKEN_TYPES.to_vec(),
                 },
                 full: Some(SemanticTokensFullOptions::Bool(true)),
                 ..Default::default()
             }),
         );
     }
-}
-
-fn supports_multiline_tokens(client_capability: &ClientCapabilities) -> bool {
-    if let Some(text_document) = &client_capability.text_document {
-        if let Some(support) = &text_document.semantic_tokens {
-            if let Some(support) = &support.multiline_token_support {
-                return *support;
-            }
-        }
-    }
-
-    false
 }

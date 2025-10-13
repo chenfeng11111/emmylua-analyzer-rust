@@ -7,14 +7,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use crate::config::configs::{EmmyrcExternalTool, EmmyrcReformat};
 pub use config_loader::{load_configs, load_configs_raw};
-pub use configs::{DocSyntax, EmmyrcFilenameConvention, EmmyrcLuaVersion};
-use configs::{
-    EmmyrcCodeAction, EmmyrcCodeLens, EmmyrcCompletion, EmmyrcDiagnostic, EmmyrcDoc,
-    EmmyrcDocumentColor, EmmyrcHover, EmmyrcInlayHint, EmmyrcInlineValues, EmmyrcReference,
-    EmmyrcResource, EmmyrcRuntime, EmmyrcSemanticToken, EmmyrcSignature, EmmyrcStrict,
-    EmmyrcWorkspace,
+pub use configs::{
+    DiagnosticSeveritySetting, DocSyntax, EmmyrcCodeAction, EmmyrcCodeLens, EmmyrcCompletion,
+    EmmyrcDiagnostic, EmmyrcDoc, EmmyrcDocumentColor, EmmyrcExternalTool, EmmyrcFilenameConvention,
+    EmmyrcHover, EmmyrcInlayHint, EmmyrcInlineValues, EmmyrcLuaVersion, EmmyrcReference,
+    EmmyrcReformat, EmmyrcResource, EmmyrcRuntime, EmmyrcSemanticToken, EmmyrcSignature,
+    EmmyrcStrict, EmmyrcWorkspace, EmmyrcWorkspaceModuleMap,
 };
 use emmylua_parser::{LuaLanguageLevel, LuaNonStdSymbolSet, ParserConfig, SpecialFunction};
 use regex::Regex;
@@ -72,7 +71,7 @@ impl Emmyrc {
         let lua_language_level = self.get_language_level();
         let mut special_like = HashMap::new();
         for (name, func) in self.runtime.special.iter() {
-            if let Some(func) = func.clone().into() {
+            if let Some(func) = (*func).into() {
                 special_like.insert(name.clone(), func);
             }
         }
@@ -81,7 +80,7 @@ impl Emmyrc {
         }
         let mut non_std_symbols = LuaNonStdSymbolSet::new();
         for symbol in self.runtime.nonstandard_symbol.iter() {
-            non_std_symbols.add(symbol.clone().into());
+            non_std_symbols.add((*symbol).into());
         }
 
         ParserConfig::new(

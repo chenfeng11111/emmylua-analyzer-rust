@@ -23,8 +23,10 @@ pub fn generate_type_markdown(
     check_filter(db, typ)?;
     let mut context = tera::Context::new();
     let typ_name = typ.get_name();
-    let mut doc = Doc::default();
-    doc.name = typ_name.to_string();
+    let mut doc = Doc {
+        name: typ_name.to_string(),
+        ..Default::default()
+    };
 
     if typ.is_class() {
         generate_class_type_markdown(db, tl, typ, &mut doc, &mut context, output, mkdocs_index);
@@ -92,10 +94,10 @@ fn generate_class_type_markdown(
             let member_id = member.get_id();
             let member_property_id = LuaSemanticDeclId::Member(member_id);
             let member_property = db.get_property_index().get_property(&member_property_id);
-            if let Some(member_property) = member_property {
-                if member_property.visibility != VisibilityKind::Public {
-                    continue;
-                }
+            if let Some(member_property) = member_property
+                && member_property.visibility != VisibilityKind::Public
+            {
+                continue;
             }
 
             let member_property = collect_property(db, member_property_id);
@@ -201,10 +203,10 @@ fn generate_enum_type_markdown(
             let member_id = member.get_id();
             let member_property_id = LuaSemanticDeclId::Member(member_id);
             let member_property = db.get_property_index().get_property(&member_property_id);
-            if let Some(member_property) = member_property {
-                if member_property.visibility != VisibilityKind::Public {
-                    continue;
-                }
+            if let Some(member_property) = member_property
+                && member_property.visibility != VisibilityKind::Public
+            {
+                continue;
             }
 
             let member_property = collect_property(db, member_property_id);

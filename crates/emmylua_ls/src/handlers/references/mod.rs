@@ -1,4 +1,4 @@
-mod reference_seacher;
+mod reference_searcher;
 
 use crate::context::ServerContextSnapshot;
 use emmylua_code_analysis::{EmmyLuaAnalysis, FileId};
@@ -6,8 +6,8 @@ use emmylua_parser::{LuaAstNode, LuaTokenKind};
 use lsp_types::{
     ClientCapabilities, Location, OneOf, Position, ReferenceParams, ServerCapabilities,
 };
-use reference_seacher::search_references;
-pub use reference_seacher::{search_decl_references, search_member_references};
+use reference_searcher::search_references;
+pub use reference_searcher::{search_decl_references, search_member_references};
 use rowan::TokenAtOffset;
 use tokio_util::sync::CancellationToken;
 
@@ -31,7 +31,7 @@ pub fn references(
     file_id: FileId,
     position: Position,
 ) -> Option<Vec<Location>> {
-    let mut semantic_model = analysis.compilation.get_semantic_model(file_id)?;
+    let semantic_model = analysis.compilation.get_semantic_model(file_id)?;
     if !semantic_model.get_emmyrc().references.enable {
         return None;
     }
@@ -60,7 +60,7 @@ pub fn references(
         }
     };
 
-    search_references(&mut semantic_model, &analysis.compilation, token)
+    search_references(&semantic_model, &analysis.compilation, token)
 }
 
 pub struct ReferencesCapabilities;

@@ -39,10 +39,10 @@ fn check_name_expr(
     )?;
 
     let decl_id = LuaDeclId::new(semantic_model.get_file_id(), name_expr.get_position());
-    if let LuaSemanticDeclId::LuaDecl(id) = &semantic_decl {
-        if *id == decl_id {
-            return Some(());
-        }
+    if let LuaSemanticDeclId::LuaDecl(id) = &semantic_decl
+        && *id == decl_id
+    {
+        return Some(());
     }
 
     let property = semantic_model
@@ -50,7 +50,7 @@ fn check_name_expr(
         .get_property_index()
         .get_property(&semantic_decl)?;
     if let Some(deprecated) = property.deprecated() {
-        let depreacated_message = match deprecated {
+        let deprecated_message = match deprecated {
             LuaDeprecated::Deprecated => "deprecated".to_string(),
             LuaDeprecated::DeprecatedWithMessage(message) => message.to_string(),
         };
@@ -58,7 +58,7 @@ fn check_name_expr(
         context.add_diagnostic(
             DiagnosticCode::Deprecated,
             name_expr.get_range(),
-            depreacated_message,
+            deprecated_message,
             None,
         );
     }
@@ -75,17 +75,17 @@ fn check_index_expr(
         SemanticDeclLevel::default(),
     )?;
     let member_id = LuaMemberId::new(index_expr.get_syntax_id(), semantic_model.get_file_id());
-    if let LuaSemanticDeclId::Member(id) = &semantic_decl {
-        if *id == member_id {
-            return Some(());
-        }
+    if let LuaSemanticDeclId::Member(id) = &semantic_decl
+        && *id == member_id
+    {
+        return Some(());
     }
     let property = semantic_model
         .get_db()
         .get_property_index()
         .get_property(&semantic_decl)?;
     if let Some(deprecated) = property.deprecated() {
-        let depreacated_message = match deprecated {
+        let deprecated_message = match deprecated {
             LuaDeprecated::Deprecated => "deprecated".to_string(),
             LuaDeprecated::DeprecatedWithMessage(message) => message.to_string(),
         };
@@ -95,7 +95,7 @@ fn check_index_expr(
         context.add_diagnostic(
             DiagnosticCode::Deprecated,
             index_name_range,
-            depreacated_message,
+            deprecated_message,
             None,
         );
     }

@@ -170,6 +170,20 @@ pub fn parse_stats(p: &mut LuaParser) {
                     p.push_node_end();
                 }
 
+                let mut can_continue = false;
+                // error recover
+                while p.current_token() != LuaTokenKind::TkEof {
+                    if is_statement_start_token(p.current_token()) {
+                        can_continue = true;
+                        break;
+                    }
+
+                    p.bump();
+                }
+
+                if can_continue {
+                    continue;
+                }
                 break;
             }
         }
@@ -177,14 +191,14 @@ pub fn parse_stats(p: &mut LuaParser) {
 }
 
 fn block_follow(p: &LuaParser) -> bool {
-    match p.current_token() {
+    matches!(
+        p.current_token(),
         LuaTokenKind::TkElse
-        | LuaTokenKind::TkElseIf
-        | LuaTokenKind::TkEnd
-        | LuaTokenKind::TkEof
-        | LuaTokenKind::TkUntil => true,
-        _ => false,
-    }
+            | LuaTokenKind::TkElseIf
+            | LuaTokenKind::TkEnd
+            | LuaTokenKind::TkEof
+            | LuaTokenKind::TkUntil
+    )
 }
 
 fn parse_stat(p: &mut LuaParser) -> ParseResult {
@@ -547,7 +561,7 @@ fn parse_local(p: &mut LuaParser) -> ParseResult {
             // 可选的初始化表达式
             if p.current_token().is_assign_op() {
                 p.bump();
-                if let Err(_) = parse_expr_list_impl(p) {
+                if parse_expr_list_impl(p).is_err() {
                     push_expr_error_lazy(p, || t!("expected initialization expression after '='"));
                 }
             }
@@ -568,7 +582,7 @@ fn parse_local(p: &mut LuaParser) -> ParseResult {
 
                 if p.current_token().is_assign_op() {
                     p.bump();
-                    if let Err(_) = parse_expr_list_impl(p) {
+                    if parse_expr_list_impl(p).is_err() {
                         push_expr_error_lazy(p, || {
                             t!("expected initialization expression after '='")
                         });
@@ -656,10 +670,11 @@ fn parse_attrib(p: &mut LuaParser) -> ParseResult {
 fn parse_return(p: &mut LuaParser) -> ParseResult {
     let m = p.mark(LuaSyntaxKind::ReturnStat);
     p.bump();
-    if !block_follow(p) && p.current_token() != LuaTokenKind::TkSemicolon {
-        if let Err(_) = parse_expr_list_impl(p) {
-            push_expr_error_lazy(p, || t!("expected expression in return statement"));
-        }
+    if !block_follow(p)
+        && p.current_token() != LuaTokenKind::TkSemicolon
+        && parse_expr_list_impl(p).is_err()
+    {
+        push_expr_error_lazy(p, || t!("expected expression in return statement"));
     }
 
     if_token_bump(p, LuaTokenKind::TkSemicolon);
@@ -739,14 +754,13 @@ fn try_parse_global_stat(p: &mut LuaParser) -> ParseResult {
 }
 
 fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
-    if p.parse_config.level >= LuaLanguageLevel::Lua55 {
-        if p.current_token() == LuaTokenKind::TkName {
-            let token_text = p.current_token_text();
-            if token_text == "global" {
-                let cm = try_parse_global_stat(p)?;
-                if !cm.is_invalid() {
-                    return Ok(cm);
-                }
+    if p.parse_config.level >= LuaLanguageLevel::Lua55 && p.current_token() == LuaTokenKind::TkName
+    {
+        let token_text = p.current_token_text();
+        if token_text == "global" {
+            let cm = try_parse_global_stat(p)?;
+            if !cm.is_invalid() {
+                return Ok(cm);
             }
         }
     }
@@ -823,7 +837,7 @@ fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
         p.bump();
 
         // 解析右值表达式列表
-        if let Err(_) = parse_expr_list_impl(p) {
+        if parse_expr_list_impl(p).is_err() {
             push_expr_error_lazy(p, || t!("expected expression after '=' in assignment"));
         }
     } else {

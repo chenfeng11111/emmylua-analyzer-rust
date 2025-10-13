@@ -103,6 +103,10 @@ pub enum DiagnosticCode {
     EnumValueMismatch,
     /// preferred-local-alias
     PreferredLocalAlias,
+    /// readonly
+    ReadOnly,
+    /// Global variable defined in non-module scope
+    GlobalInNonModule,
 
     #[serde(other)]
     None,

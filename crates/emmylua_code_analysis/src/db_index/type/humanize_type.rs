@@ -14,6 +14,8 @@ use super::{LuaAliasCallKind, LuaMultiLineUnion};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderLevel {
     Documentation,
+    // donot more than 255
+    CustomDetailed(u8),
     Detailed,
     Simple,
     Normal,
@@ -25,6 +27,7 @@ impl RenderLevel {
     pub fn next_level(self) -> RenderLevel {
         match self {
             RenderLevel::Documentation => RenderLevel::Simple,
+            RenderLevel::CustomDetailed(_) => RenderLevel::Simple,
             RenderLevel::Detailed => RenderLevel::Simple,
             RenderLevel::Simple => RenderLevel::Normal,
             RenderLevel::Normal => RenderLevel::Brief,
@@ -122,8 +125,7 @@ fn humanize_def_type(db: &DbIndex, id: &LuaTypeDeclId, level: RenderLevel) -> St
     let generic = match db.get_type_index().get_generic_params(id) {
         Some(generic) => generic,
         None => {
-            return humanize_simple_type(db, id, &full_name, level)
-                .unwrap_or(full_name.to_string());
+            return humanize_simple_type(db, id, full_name, level).unwrap_or(full_name.to_string());
         }
     };
 
@@ -147,10 +149,12 @@ fn humanize_simple_type(
     name: &str,
     level: RenderLevel,
 ) -> Option<String> {
-    if !matches!(level, RenderLevel::Detailed | RenderLevel::Documentation) {
-        return Some(name.to_string());
-    }
-    let max_display_count = 12;
+    let max_display_count = match level {
+        RenderLevel::Documentation => 500,
+        RenderLevel::CustomDetailed(n) => n as usize,
+        RenderLevel::Detailed => 12,
+        _ => return Some(name.to_string()),
+    };
 
     let member_owner = LuaMemberOwner::Type(id.clone());
     let member_index = db.get_member_index();
@@ -231,6 +235,7 @@ where
     let types = union.into_vec();
     let num = match level {
         RenderLevel::Documentation => 500,
+        RenderLevel::CustomDetailed(n) => n as usize,
         RenderLevel::Detailed => 8,
         RenderLevel::Simple => 6,
         RenderLevel::Normal => 4,
@@ -277,6 +282,7 @@ fn humanize_multi_line_union_type(
     let members = multi_union.get_unions();
     let num = match level {
         RenderLevel::Documentation => 500,
+        RenderLevel::CustomDetailed(n) => n as usize,
         RenderLevel::Detailed => 10,
         RenderLevel::Simple => 8,
         RenderLevel::Normal => 4,
@@ -297,9 +303,9 @@ fn humanize_multi_line_union_type(
         return text;
     }
 
-    text.push_str("\n");
+    text.push('\n');
     for (typ, description) in members {
-        let type_humanize_text = humanize_type(db, &typ, RenderLevel::Minimal);
+        let type_humanize_text = humanize_type(db, typ, RenderLevel::Minimal);
         if let Some(description) = description {
             text.push_str(&format!(
                 "    | {} -- {}\n",
@@ -317,6 +323,7 @@ fn humanize_tuple_type(db: &DbIndex, tuple: &LuaTupleType, level: RenderLevel) -
     let types = tuple.get_types();
     let num = match level {
         RenderLevel::Documentation => 500,
+        RenderLevel::CustomDetailed(n) => n as usize,
         RenderLevel::Detailed => 10,
         RenderLevel::Simple => 8,
         RenderLevel::Normal => 4,
@@ -392,10 +399,7 @@ fn humanize_doc_function_type(
 
     let ret_type = lua_func.get_ret();
     let return_nil = match ret_type {
-        LuaType::Variadic(variadic) => match variadic.get_type(0) {
-            Some(LuaType::Nil) => true,
-            _ => false,
-        },
+        LuaType::Variadic(variadic) => matches!(variadic.get_type(0), Some(LuaType::Nil)),
         _ => ret_type.is_nil(),
     };
 
@@ -411,6 +415,7 @@ fn humanize_doc_function_type(
 fn humanize_object_type(db: &DbIndex, object: &LuaObjectType, level: RenderLevel) -> String {
     let num = match level {
         RenderLevel::Documentation => 500,
+        RenderLevel::CustomDetailed(n) => n as usize,
         RenderLevel::Detailed => 10,
         RenderLevel::Simple => 8,
         RenderLevel::Normal => 4,
@@ -429,7 +434,7 @@ fn humanize_object_type(db: &DbIndex, object: &LuaObjectType, level: RenderLevel
     let fields = object
         .get_fields()
         .iter()
-        .sorted_by(|a, b| a.0.cmp(&b.0))
+        .sorted_by(|a, b| a.0.cmp(b.0))
         .take(num)
         .map(|field| {
             let name = field.0.clone();
@@ -470,6 +475,7 @@ fn humanize_intersect_type(
 ) -> String {
     let num = match level {
         RenderLevel::Documentation => 500,
+        RenderLevel::CustomDetailed(n) => n as usize,
         RenderLevel::Detailed => 10,
         RenderLevel::Simple => 8,
         RenderLevel::Normal => 4,
@@ -542,8 +548,8 @@ fn humanize_table_const_type_detail_and_simple(
         };
         let member_string = build_table_member_string(
             key,
-            &type_cache.as_type(),
-            humanize_type(db, &type_cache.as_type(), level.next_level()),
+            type_cache.as_type(),
+            humanize_type(db, type_cache.as_type(), level.next_level()),
             level,
         );
 
@@ -597,11 +603,12 @@ fn humanize_table_const_type(
 
 fn humanize_table_generic_type(
     db: &DbIndex,
-    table_generic_params: &Vec<LuaType>,
+    table_generic_params: &[LuaType],
     level: RenderLevel,
 ) -> String {
     let num = match level {
         RenderLevel::Documentation => 500,
+        RenderLevel::CustomDetailed(n) => n as usize,
         RenderLevel::Detailed => 10,
         RenderLevel::Simple => 8,
         RenderLevel::Normal => 4,
@@ -653,6 +660,7 @@ fn humanize_variadic_type(db: &DbIndex, multi: &VariadicType, level: RenderLevel
         VariadicType::Multi(types) => {
             let max_num = match level {
                 RenderLevel::Documentation => 500,
+                RenderLevel::CustomDetailed(n) => n as usize,
                 RenderLevel::Detailed => 10,
                 RenderLevel::Simple => 8,
                 RenderLevel::Normal => 4,
@@ -722,10 +730,7 @@ fn humanize_signature_type(
     let ret_str = {
         let ret_type = signature.get_return_type();
         let return_nil = match ret_type {
-            LuaType::Variadic(variadic) => match variadic.get_type(0) {
-                Some(LuaType::Nil) => true,
-                _ => false,
-            },
+            LuaType::Variadic(variadic) => matches!(variadic.get_type(0), Some(LuaType::Nil)),
             _ => ret_type.is_nil(),
         };
 

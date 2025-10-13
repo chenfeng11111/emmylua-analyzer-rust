@@ -53,7 +53,7 @@ pub fn add_member_completion(
             _ => return None,
         },
         CompletionTriggerStatus::LeftBracket => match member_key {
-            LuaMemberKey::Name(name) => format!("\"{}\"", name.to_string()),
+            LuaMemberKey::Name(name) => format!("\"{}\"", name),
             LuaMemberKey::Integer(index) => format!("{}", index),
             _ => return None,
         },
@@ -61,7 +61,7 @@ pub fn add_member_completion(
 
     let typ = &member_info.typ;
     let remove_nil_type =
-        get_function_remove_nil(&builder.semantic_model.get_db(), typ).unwrap_or(typ.clone());
+        get_function_remove_nil(builder.semantic_model.get_db(), typ).unwrap_or(typ.clone());
     if status == CompletionTriggerStatus::Colon && !remove_nil_type.is_function() {
         return None;
     }
@@ -69,9 +69,9 @@ pub fn add_member_completion(
     // 附加数据, 用于在`resolve`时进一步处理
     let completion_data = if let Some(id) = &property_owner {
         if let Some(index) = member_info.overload_index {
-            CompletionData::from_overload(builder, id.clone().into(), index, overload_count)
+            CompletionData::from_overload(builder, id.clone(), index, overload_count)
         } else {
-            CompletionData::from_property_owner_id(builder, id.clone().into(), overload_count)
+            CompletionData::from_property_owner_id(builder, id.clone(), overload_count)
         }
     } else {
         None
@@ -92,12 +92,10 @@ pub fn add_member_completion(
     // 在`detail`更右侧, 且不紧靠着`detail`显示
     let description = get_description(builder, &remove_nil_type);
 
-    let deprecated = if let Some(id) = &property_owner {
-        Some(is_deprecated(builder, id.clone()))
-    } else {
-        None
-    };
-    
+    let deprecated = property_owner
+        .as_ref()
+        .map(|id| is_deprecated(builder, id.clone()));
+
     let completion_kind = get_completion_kind(&typ);
     let emmyrc = builder.semantic_model.get_emmyrc();
     let insert_text = get_function_insert_text(
@@ -188,7 +186,7 @@ fn add_signature_overloads(
         .semantic_model
         .get_db()
         .get_signature_index()
-        .get(&signature_id)?
+        .get(signature_id)?
         .overloads
         .clone();
 
@@ -200,7 +198,7 @@ fn add_signature_overloads(
             let description = get_description(builder, &typ);
             let detail = get_detail(builder, &typ, call_display);
             let data = if let Some(id) = &property_owner {
-                CompletionData::from_overload(builder, id.clone().into(), index, overload_count)
+                CompletionData::from_overload(builder, id.clone(), index, overload_count)
             } else {
                 None
             };
@@ -279,7 +277,7 @@ fn resolve_function_params(
     if completion_item.insert_text.is_some() || completion_item.text_edit.is_some() {
         return None;
     }
-    let new_text = get_resolve_function_params_str(&typ, call_display)?;
+    let new_text = get_resolve_function_params_str(typ, call_display)?;
     let index_expr = LuaIndexExpr::cast(builder.trigger_token.parent()?)?;
     let func_stat = index_expr.get_parent::<LuaFuncStat>()?;
     // 从 ast 解析
@@ -290,11 +288,11 @@ fn resolve_function_params(
     let assign_stat = LuaAssignStat::cast(next_sibling)?;
     let paren_expr = assign_stat.child::<LuaParenExpr>()?;
     // 如果 ast 中包含了参数, 则不补全
-    if let Some(_) = paren_expr.get_expr() {
+    if paren_expr.get_expr().is_some() {
         return None;
     }
     let left_paren = paren_expr.token::<LuaGeneralToken>()?;
-    if left_paren.get_token_kind() != LuaTokenKind::TkLeftParen.into() {
+    if left_paren.get_token_kind() != LuaTokenKind::TkLeftParen {
         return None;
     }
     // 可能不稳定! 因为 completion_item.label 先被应用, 然后再应用本项, 此时 range 发生了改变
@@ -310,7 +308,7 @@ fn resolve_function_params(
 
     completion_item.additional_text_edits = Some(vec![lsp_types::TextEdit {
         range: lsp_add_range,
-        new_text: new_text,
+        new_text,
     }]);
 
     Some(())
@@ -336,7 +334,7 @@ fn get_resolve_function_params_str(typ: &LuaType, display: CallDisplay) -> Optio
                 }
                 _ => {}
             }
-            Some(format!("{}", params_str.join(", ")))
+            Some(params_str.join(", ").to_string())
         }
         _ => None,
     }

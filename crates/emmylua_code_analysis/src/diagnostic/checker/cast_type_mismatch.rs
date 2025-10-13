@@ -38,7 +38,7 @@ fn check_cast_tag(
     // 检查每个 cast 操作类型
     for op_type in cast_tag.get_op_types() {
         // 如果具有操作符, 则不检查
-        if let Some(_) = op_type.get_op() {
+        if op_type.get_op().is_some() {
             continue;
         }
         if let Some(target_doc_type) = op_type.get_type() {
@@ -87,7 +87,7 @@ fn check_cast_compatibility(
         _ => cast_type_check(semantic_model, origin_type, target_type, 0),
     };
 
-    if !result.is_ok() {
+    if result.is_err() {
         add_cast_type_mismatch_diagnostic(
             context,
             semantic_model,
@@ -111,7 +111,7 @@ fn add_cast_type_mismatch_diagnostic(
 ) {
     let db = semantic_model.get_db();
     match result {
-        Ok(_) => return,
+        Ok(_) => (),
         Err(reason) => {
             let reason_message = match reason {
                 TypeCheckFailReason::TypeNotMatchWithReason(reason) => reason,
@@ -176,7 +176,7 @@ fn cast_type_check(
                     }
                 }
             }
-            return Ok(());
+            Ok(())
         }
         _ => {
             if origin_type.is_table() {
@@ -194,13 +194,11 @@ fn cast_type_check(
                 if target_type.is_string() {
                     return Ok(());
                 }
-            } else if origin_type.is_number() {
-                if target_type.is_number() {
-                    return Ok(());
-                }
+            } else if origin_type.is_number() && target_type.is_number() {
+                return Ok(());
             }
 
-            semantic_model.type_check(target_type, origin_type)
+            semantic_model.type_check_detail(target_type, origin_type)
         }
     }
 }
@@ -223,13 +221,13 @@ fn expand_type_recursive(
     visited.insert(typ.clone());
 
     // 展开类型, 如果具有多种类型将尽量返回 union
-    match get_real_type(db, &typ).unwrap_or(&typ) {
+    match get_real_type(db, typ).unwrap_or(typ) {
         LuaType::Ref(id) | LuaType::Def(id) => {
             let type_decl = db.get_type_index().get_type_decl(id)?;
-            if type_decl.is_enum() {
-                if let Some(typ) = type_decl.get_enum_field_type(db) {
-                    return expand_type_recursive(db, &typ, visited);
-                }
+            if type_decl.is_enum()
+                && let Some(typ) = type_decl.get_enum_field_type(db)
+            {
+                return expand_type_recursive(db, &typ, visited);
             };
         }
         LuaType::Instance(inst) => {
@@ -272,7 +270,13 @@ fn expand_type_recursive(
                         Some(LuaType::Unknown)
                     }
                 }
-                1 => Some(expanded_types.iter().cloned().next().unwrap().into()),
+                1 => Some(
+                    expanded_types
+                        .iter()
+                        .next()
+                        .cloned()
+                        .expect("always one element"),
+                ),
                 _ => Some(LuaType::Union(
                     LuaUnionType::from_set(expanded_types).into(),
                 )),

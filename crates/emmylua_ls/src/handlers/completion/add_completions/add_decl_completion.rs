@@ -26,16 +26,16 @@ pub fn add_decl_completion(
         emmyrc.completion.function_completion_need_parentheses,
         typ,
     );
-    
+
     let mut completion_item = CompletionItem {
         label: name.to_string(),
-        kind: Some(get_completion_kind(&typ)),
+        kind: Some(get_completion_kind(typ)),
         insert_text_format: Some(InsertTextFormat::SNIPPET),
         insert_text: Some(insert_text),
         data: CompletionData::from_property_owner_id(builder, decl_id.into(), overload_count),
         label_details: Some(lsp_types::CompletionItemLabelDetails {
-            detail: get_detail(builder, &typ, CallDisplay::None),
-            description: get_description(builder, &typ),
+            detail: get_detail(builder, typ, CallDisplay::None),
+            description: get_description(builder, typ),
         }),
         ..Default::default()
     };
@@ -56,7 +56,7 @@ fn count_function_overloads(db: &DbIndex, typ: &LuaType) -> Option<usize> {
         }
         LuaType::Signature(id) => {
             count += 1;
-            if let Some(signature) = db.get_signature_index().get(&id) {
+            if let Some(signature) = db.get_signature_index().get(id) {
                 count += signature.overloads.len();
             }
         }
