@@ -8,28 +8,22 @@ use internment::ArcIntern;
 use rowan::TextRange;
 use smol_str::SmolStr;
 
-use crate::{
-    CacheEntry, GenericTpl, InFiled, InferGuardRef, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId,
-    LuaInferCache, LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps,
-    db_index::{
-        DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
-        LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
+use crate::{CacheEntry, GenericTpl, InFiled, InferGuardRef, LuaArrayLen, LuaArrayType, LuaDeclOrMemberId, LuaInferCache, LuaInstanceType, LuaMemberOwner, LuaOperatorOwner, TypeOps, db_index::{
+    DbIndex, LuaGenericType, LuaIntersectionType, LuaMemberKey, LuaObjectType,
+    LuaOperatorMetaMethod, LuaTupleType, LuaType, LuaTypeDeclId, LuaUnionType,
+}, enum_variable_is_param, get_tpl_ref_extend_type, semantic::{
+    InferGuard,
+    generic::{TypeSubstitutor, instantiate_type_generic},
+    infer::{
+        VarRefId,
+        infer_name::get_name_expr_var_ref_id,
+        narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
     },
-    enum_variable_is_param, get_tpl_ref_extend_type,
-    semantic::{
-        InferGuard,
-        generic::{TypeSubstitutor, instantiate_type_generic},
-        infer::{
-            VarRefId,
-            infer_name::get_name_expr_var_ref_id,
-            narrow::{get_var_expr_var_ref_id, infer_expr_narrow_type},
-        },
-        member::get_buildin_type_map_type_id,
-        type_check::{self, check_type_compact},
-    },
-};
+    member::get_buildin_type_map_type_id,
+    type_check::{self, check_type_compact},
+}, LuaFunctionType, AsyncState};
 
-use super::{infer_expr, infer_name::infer_global_type, InferFailReason, InferResult};
+use super::{InferFailReason, InferResult, infer_expr, infer_name::infer_global_type};
 
 pub fn infer_index_expr(
     db: &DbIndex,
@@ -460,12 +454,13 @@ fn infer_custom_type_member(
                     infer_guard,
                 );
 
-            match result {
-                Ok(member_type) => {
-                    return Ok(member_type);
+                match result {
+                    Ok(member_type) => {
+                        return Ok(member_type);
+                    }
+                    Err(InferFailReason::FieldNotFound) => {}
+                    Err(err) => return Err(err),
                 }
-                Err(InferFailReason::FieldNotFound) => {}
-                Err(err) => return Err(err),
             }
         }
     }
@@ -485,7 +480,7 @@ fn infer_custom_type_member(
             if let Some(member_item) = db.get_member_index().get_member_item(&owner, &key)
                 && let Ok(member_type) = member_item.resolve_type(db)
             {
-                result_types.push(member_type);
+                result_types.push(member_type.clone());
             }
         }
         match &result_types[..] {
@@ -520,7 +515,7 @@ fn get_expr_key_members(
             if let Some(member_item) = db.get_member_index().get_member_item(owner, &key)
                 && let Ok(member_type) = member_item.resolve_type(db)
             {
-                result.push(member_type);
+                result.push(member_type.clone());
             }
         }
     }

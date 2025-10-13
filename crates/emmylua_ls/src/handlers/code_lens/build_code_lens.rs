@@ -105,7 +105,7 @@ fn add_func_stat_override_code_lens(
 
             let index_key = index_expr.get_index_key()?;
             let member_key: LuaMemberKey = semantic_model.get_member_key(&index_key)?;
-            let infer_guard = &mut InferGuard::new();
+            let infer_guard = &InferGuard::new();
             for super_type in supers {
                 if let Some(member_id) =
                     get_super_member_id(semantic_model, super_type, &member_key, infer_guard)
@@ -134,7 +134,7 @@ fn get_super_member_id(
     semantic_model: &SemanticModel,
     super_type: LuaType,
     member_key: &LuaMemberKey,
-    infer_guard: &mut InferGuard,
+    infer_guard: &InferGuard,
 ) -> Option<LuaMemberId> {
     let super_type_id = match &super_type {
         LuaType::Ref(id) => id,

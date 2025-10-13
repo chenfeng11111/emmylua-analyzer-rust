@@ -294,7 +294,7 @@ impl LuaMemberIndex {
         let type_index = db.get_type_index();
         let is_lua_behavior = type_index
             .get_type_decl(prefix_type_id)
-            .map_or(false, |decl| decl.is_lua_behavior(db, &mut InferGuard::new()));
+            .map_or(false, |decl| decl.is_lua_behavior(db, &InferGuard::new()));
 
         if !is_lua_behavior {
             return None;

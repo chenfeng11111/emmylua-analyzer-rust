@@ -56,7 +56,7 @@ pub fn get_lua_behavior_args_map(
     // 获取类型声明并检查是否为 lua_behavior
     let type_index = db.get_type_index();
     let type_decl = type_index.get_type_decl(type_decl_id)?;
-    if !type_decl.is_lua_behavior(db, &mut InferGuard::new()) {
+    if !type_decl.is_lua_behavior(db, &InferGuard::new()) {
         return None;
     }
 
