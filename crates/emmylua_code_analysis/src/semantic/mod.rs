@@ -31,7 +31,7 @@ use member::{find_member_origin_owner, find_members};
 use reference::is_reference_to;
 use rowan::{NodeOrToken, TextRange};
 pub use semantic_info::SemanticInfo;
-pub(crate) use semantic_info::infer_node_semantic_decl;
+pub(crate) use semantic_info::{infer_node_semantic_decl, resolve_global_decl_id};
 use semantic_info::{
     infer_node_semantic_info, infer_token_semantic_decl, infer_token_semantic_info,
 };
@@ -51,8 +51,9 @@ use crate::{LuaFunctionType, LuaMemberId, LuaMemberKey, LuaTypeOwner};
 pub use generic::*;
 pub use guard::{InferGuard, InferGuardRef};
 pub use infer::InferFailReason;
+pub use infer::infer_call_expr_func;
+pub(crate) use infer::infer_expr;
 pub use infer::infer_param;
-pub(crate) use infer::{infer_call_expr_func, infer_expr};
 use overload_resolve::resolve_signature;
 pub use semantic_info::SemanticDeclLevel;
 pub use type_check::{TypeCheckFailReason, TypeCheckResult};

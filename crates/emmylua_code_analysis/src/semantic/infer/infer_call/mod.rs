@@ -13,7 +13,8 @@ use super::{
 };
 use crate::{
     CacheEntry, DbIndex, InFiled, LuaFunctionType, LuaGenericType, LuaInstanceType,
-    LuaOperatorMetaMethod, LuaOperatorOwner, LuaSignatureId, LuaType, LuaTypeDeclId, LuaUnionType,
+    LuaOperatorMetaMethod, LuaOperatorOwner, LuaSignature, LuaSignatureId, LuaType, LuaTypeDeclId,
+    LuaUnionType,
 };
 use crate::{
     InferGuardRef,
@@ -183,6 +184,7 @@ fn infer_signature_doc_function(
     if !signature.is_resolve_return() {
         return Err(InferFailReason::UnResolveSignatureReturn(signature_id));
     }
+    let is_generic = signature_is_generic(db, cache, &signature, &call_expr).unwrap_or(false);
     let overloads = &signature.overloads;
     if overloads.is_empty() {
         let mut fake_doc_function = LuaFunctionType::new(
@@ -191,7 +193,7 @@ fn infer_signature_doc_function(
             signature.get_type_params(),
             signature.get_return_type(),
         );
-        if signature.is_generic() {
+        if is_generic {
             fake_doc_function = instantiate_func_generic(db, cache, &fake_doc_function, call_expr)?;
         }
 
@@ -211,7 +213,7 @@ fn infer_signature_doc_function(
             cache,
             new_overloads,
             call_expr.clone(),
-            signature.is_generic(),
+            is_generic,
             args_count,
         )
     }
@@ -657,4 +659,24 @@ fn check_can_infer(
     }
 
     Ok(())
+}
+
+fn signature_is_generic(
+    db: &DbIndex,
+    cache: &mut LuaInferCache,
+    signature: &LuaSignature,
+    call_expr: &LuaCallExpr,
+) -> Option<bool> {
+    if signature.is_generic() {
+        return Some(true);
+    }
+    let LuaExpr::IndexExpr(index_expr) = call_expr.get_prefix_expr()? else {
+        return None;
+    };
+    let prefix_type = infer_expr(db, cache, index_expr.get_prefix_expr()?).ok()?;
+    match prefix_type {
+        // 对于 Generic 直接认为是泛型
+        LuaType::Generic(_) => Some(true),
+        _ => Some(prefix_type.contain_tpl()),
+    }
 }
