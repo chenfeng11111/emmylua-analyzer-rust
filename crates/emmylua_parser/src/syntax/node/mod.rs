@@ -89,11 +89,14 @@ pub enum LuaAst {
     LuaDocTagReturnCast(LuaDocTagReturnCast),
     LuaDocTagExport(LuaDocTagExport),
     LuaDocTagLanguage(LuaDocTagLanguage),
+    LuaDocTagAttribute(LuaDocTagAttribute),
+    LuaDocTagAttributeUse(LuaDocTagAttributeUse),
     // doc description
     LuaDocDescription(LuaDocDescription),
 
     // doc type
     LuaDocNameType(LuaDocNameType),
+    LuaDocInferType(LuaDocInferType),
     LuaDocArrayType(LuaDocArrayType),
     LuaDocFuncType(LuaDocFuncType),
     LuaDocObjectType(LuaDocObjectType),
@@ -176,9 +179,12 @@ impl LuaAstNode for LuaAst {
             LuaAst::LuaDocTagAs(node) => node.syntax(),
             LuaAst::LuaDocTagReturnCast(node) => node.syntax(),
             LuaAst::LuaDocTagExport(node) => node.syntax(),
+            LuaAst::LuaDocTagAttribute(node) => node.syntax(),
+            LuaAst::LuaDocTagAttributeUse(node) => node.syntax(),
             LuaAst::LuaDocTagLanguage(node) => node.syntax(),
             LuaAst::LuaDocDescription(node) => node.syntax(),
             LuaAst::LuaDocNameType(node) => node.syntax(),
+            LuaAst::LuaDocInferType(node) => node.syntax(),
             LuaAst::LuaDocArrayType(node) => node.syntax(),
             LuaAst::LuaDocFuncType(node) => node.syntax(),
             LuaAst::LuaDocObjectType(node) => node.syntax(),
@@ -274,6 +280,7 @@ impl LuaAstNode for LuaAst {
                 | LuaSyntaxKind::DocTagExport
                 | LuaSyntaxKind::DocTagLanguage
                 | LuaSyntaxKind::TypeName
+                | LuaSyntaxKind::TypeInfer
                 | LuaSyntaxKind::TypeArray
                 | LuaSyntaxKind::TypeFun
                 | LuaSyntaxKind::TypeObject
@@ -287,6 +294,7 @@ impl LuaAstNode for LuaAst {
                 | LuaSyntaxKind::TypeGeneric
                 | LuaSyntaxKind::TypeStringTemplate
                 | LuaSyntaxKind::TypeMultiLineUnion
+                | LuaSyntaxKind::DocAttributeUse
         )
     }
 
@@ -359,6 +367,9 @@ impl LuaAstNode for LuaAst {
             LuaSyntaxKind::DocTagClass => LuaDocTagClass::cast(syntax).map(LuaAst::LuaDocTagClass),
             LuaSyntaxKind::DocTagEnum => LuaDocTagEnum::cast(syntax).map(LuaAst::LuaDocTagEnum),
             LuaSyntaxKind::DocTagAlias => LuaDocTagAlias::cast(syntax).map(LuaAst::LuaDocTagAlias),
+            LuaSyntaxKind::DocTagAttribute => {
+                LuaDocTagAttribute::cast(syntax).map(LuaAst::LuaDocTagAttribute)
+            }
             LuaSyntaxKind::DocTagType => LuaDocTagType::cast(syntax).map(LuaAst::LuaDocTagType),
             LuaSyntaxKind::DocTagParam => LuaDocTagParam::cast(syntax).map(LuaAst::LuaDocTagParam),
             LuaSyntaxKind::DocTagReturn => {
@@ -418,6 +429,7 @@ impl LuaAstNode for LuaAst {
                 LuaDocDescription::cast(syntax).map(LuaAst::LuaDocDescription)
             }
             LuaSyntaxKind::TypeName => LuaDocNameType::cast(syntax).map(LuaAst::LuaDocNameType),
+            LuaSyntaxKind::TypeInfer => LuaDocInferType::cast(syntax).map(LuaAst::LuaDocInferType),
             LuaSyntaxKind::TypeArray => LuaDocArrayType::cast(syntax).map(LuaAst::LuaDocArrayType),
             LuaSyntaxKind::TypeFun => LuaDocFuncType::cast(syntax).map(LuaAst::LuaDocFuncType),
             LuaSyntaxKind::TypeObject => {
@@ -448,6 +460,9 @@ impl LuaAstNode for LuaAst {
             }
             LuaSyntaxKind::TypeMultiLineUnion => {
                 LuaDocMultiLineUnionType::cast(syntax).map(LuaAst::LuaDocMultiLineUnionType)
+            }
+            LuaSyntaxKind::DocTagAttributeUse => {
+                LuaDocTagAttributeUse::cast(syntax).map(LuaAst::LuaDocTagAttributeUse)
             }
             _ => None,
         }

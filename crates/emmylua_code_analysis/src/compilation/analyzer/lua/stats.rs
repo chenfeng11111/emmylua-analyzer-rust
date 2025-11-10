@@ -1,11 +1,10 @@
 use emmylua_parser::{
-    BinaryOperator, LuaAssignStat, LuaAstNode, LuaAstToken, LuaExpr, LuaFuncStat, LuaIndexExpr,
-    LuaLocalFuncStat, LuaLocalStat, LuaTableField, LuaVarExpr, PathTrait,
+    BinaryOperator, LuaAssignStat, LuaAstNode, LuaExpr, LuaFuncStat, LuaIndexExpr,
+    LuaLocalFuncStat, LuaLocalStat, LuaNameExpr, LuaTableField, LuaVarExpr, PathTrait,
 };
 
 use crate::{
-    InFiled, InferFailReason, LuaOperator, LuaOperatorMetaMethod, LuaOperatorOwner, LuaTypeCache,
-    LuaTypeOwner, OperatorFunction,
+    InFiled, InferFailReason, LuaSemanticDeclId, LuaTypeCache, LuaTypeOwner,
     compilation::analyzer::{
         common::{add_member, bind_type},
         unresolve::{UnResolveDecl, UnResolveMember},
@@ -24,6 +23,10 @@ pub fn analyze_local_stat(analyzer: &mut LuaAnalyzer, local_stat: LuaLocalStat) 
         for local_name in name_list {
             let position = local_name.get_position();
             let decl_id = LuaDeclId::new(analyzer.file_id, position);
+            // 标记了延迟定义属性, 此时将跳过绑定类型, 等待第一次赋值时再绑定类型
+            if has_delayed_definition_attribute(analyzer, decl_id) {
+                return Some(());
+            }
             analyzer
                 .db
                 .get_type_index_mut()
@@ -305,6 +308,17 @@ pub fn analyze_assign_stat(analyzer: &mut LuaAnalyzer, assign_stat: LuaAssignSta
                 continue;
             }
         };
+
+        // 如果具有延迟定义属性, 则先绑定最初的定义
+        if let LuaVarExpr::NameExpr(name_expr) = var {
+            if let Some(decl_id) = get_delayed_definition_decl_id(analyzer, name_expr) {
+                bind_type(
+                    analyzer.db,
+                    decl_id.into(),
+                    LuaTypeCache::InferType(expr_type.clone()),
+                );
+            }
+        }
         assign_merge_type_owner_and_expr_type(analyzer, type_owner, &expr_type, 0);
     }
 
@@ -415,8 +429,6 @@ pub fn analyze_func_stat(analyzer: &mut LuaAnalyzer, func_stat: LuaFuncStat) -> 
         .get_type_index_mut()
         .bind_type(type_owner, LuaTypeCache::InferType(signature_type.clone()));
 
-    try_add_class_default_call(analyzer, func_name, signature_type);
-
     Some(())
 }
 
@@ -504,52 +516,36 @@ fn special_assign_pattern(
     Some(())
 }
 
-pub fn try_add_class_default_call(
-    analyzer: &mut LuaAnalyzer,
-    func_name: LuaVarExpr,
-    signature_type: LuaType,
-) -> Option<()> {
-    let LuaType::Signature(signature_id) = signature_type else {
-        return None;
-    };
-
-    let default_name = &analyzer
-        .get_emmyrc()
-        .runtime
-        .class_default_call
-        .function_name;
-
-    if default_name.is_empty() {
-        return None;
-    }
-    if let LuaVarExpr::IndexExpr(index_expr) = func_name {
-        let index_key = index_expr.get_index_key()?;
-        if index_key.get_path_part() == *default_name {
-            let prefix_expr = index_expr.get_prefix_expr()?;
-            if let Ok(prefix_type) = analyzer.infer_expr(&prefix_expr)
-                && let LuaType::Def(decl_id) = prefix_type
+fn has_delayed_definition_attribute(analyzer: &LuaAnalyzer, decl_id: LuaDeclId) -> bool {
+    if let Some(property) = analyzer
+        .db
+        .get_property_index()
+        .get_property(&LuaSemanticDeclId::LuaDecl(decl_id))
+    {
+        if let Some(lsp_optimization) = property.find_attribute_use("lsp_optimization") {
+            if let Some(LuaType::DocStringConst(code)) = lsp_optimization.get_param_by_name("code")
             {
-                // 如果已经存在, 则不添加
-                let call = analyzer.db.get_operator_index().get_operators(
-                    &LuaOperatorOwner::Type(decl_id.clone()),
-                    LuaOperatorMetaMethod::Call,
-                );
-                if call.is_some() {
-                    return None;
+                if code.as_ref() == "delayed_definition" {
+                    return true;
                 }
-
-                let operator = LuaOperator::new(
-                    decl_id.into(),
-                    LuaOperatorMetaMethod::Call,
-                    analyzer.file_id,
-                    // 必须指向名称, 使用 index_expr 的完整范围不会跳转到函数上
-                    index_expr.get_name_token()?.syntax().text_range(),
-                    OperatorFunction::DefaultCall(signature_id),
-                );
-                analyzer.db.get_operator_index_mut().add_operator(operator);
-            }
+            };
         }
     }
+    false
+}
 
-    Some(())
+// 获取延迟定义的声明id
+fn get_delayed_definition_decl_id(
+    analyzer: &LuaAnalyzer,
+    name_expr: &LuaNameExpr,
+) -> Option<LuaDeclId> {
+    let file_id = analyzer.file_id;
+    let references_index = analyzer.db.get_reference_index();
+    let range = name_expr.get_range();
+    let file_ref = references_index.get_local_reference(&file_id)?;
+    let decl_id = file_ref.get_decl_id(&range)?;
+    if !has_delayed_definition_attribute(analyzer, decl_id) {
+        return None;
+    }
+    Some(decl_id)
 }

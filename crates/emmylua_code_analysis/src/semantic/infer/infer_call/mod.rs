@@ -5,9 +5,8 @@ use rowan::TextRange;
 
 use super::{
     super::{
-        InferGuard, LuaInferCache,
-        generic::{TypeSubstitutor, instantiate_func_generic},
-        instantiate_type_generic, resolve_signature,
+        InferGuard, LuaInferCache, generic::TypeSubstitutor, instantiate_type_generic,
+        resolve_signature,
     },
     InferFailReason, InferResult,
 };
@@ -22,7 +21,7 @@ use crate::{
         generic::instantiate_doc_function, infer::narrow::get_type_at_call_expr_inline_cast,
     },
 };
-use crate::{build_self_type, infer_self_type, semantic::infer_expr};
+use crate::{build_self_type, infer_self_type, instantiate_func_generic, semantic::infer_expr};
 use infer_require::infer_require_call;
 use infer_setmetatable::infer_setmetatable_call;
 
@@ -251,8 +250,8 @@ fn infer_type_doc_function(
 
     let operator_index = db.get_operator_index();
     let operator_ids = operator_index
-        .get_operators(&type_id.into(), LuaOperatorMetaMethod::Call)
-        .ok_or(InferFailReason::None)?;
+        .get_operators(&type_id.clone().into(), LuaOperatorMetaMethod::Call)
+        .ok_or(InferFailReason::UnResolveOperatorCall)?;
     let mut overloads = Vec::new();
     for overload_id in operator_ids {
         let operator = operator_index

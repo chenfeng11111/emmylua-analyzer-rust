@@ -40,7 +40,7 @@ use type_check::is_sub_type_of;
 pub use visibility::check_export_visibility;
 use visibility::check_visibility;
 
-use crate::semantic::member::find_members_with_key;
+pub use crate::semantic::member::find_members_with_key;
 use crate::semantic::type_check::check_type_compact_detail;
 use crate::{Emmyrc, LuaDocument, LuaSemanticDeclId, ModuleInfo, db_index::LuaTypeDeclId};
 use crate::{
@@ -58,6 +58,8 @@ use overload_resolve::resolve_signature;
 pub use semantic_info::SemanticDeclLevel;
 pub use type_check::{TypeCheckFailReason, TypeCheckResult};
 use crate::semantic::member::get_lua_behavior_args_map;
+
+pub use infer::{DocTypeInferContext, infer_doc_type};
 
 #[derive(Debug)]
 pub struct SemanticModel<'a> {

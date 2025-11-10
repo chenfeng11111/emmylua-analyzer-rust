@@ -13,7 +13,7 @@ pub struct ParamTypeCheckChecker;
 
 impl Checker for ParamTypeCheckChecker {
     const CODES: &[DiagnosticCode] = &[
-        DiagnosticCode::ParamTypeNotMatch,
+        DiagnosticCode::ParamTypeMismatch,
         DiagnosticCode::AssignTypeMismatch,
     ];
 
@@ -105,9 +105,9 @@ fn check_call_expr(
                         && let Some(add_diagnostic) = check_table_expr(
                             context,
                             semantic_model,
+                            rowan::NodeOrToken::Node(arg_expr.syntax().clone()),
                             arg_expr,
                             Some(&param_type),
-                            Some(arg_type),
                         )
                         && add_diagnostic
                     {
@@ -196,7 +196,7 @@ fn add_type_check_diagnostic(
                 TypeCheckFailReason::TypeRecursion => "type recursion".to_string(),
             };
             context.add_diagnostic(
-                DiagnosticCode::ParamTypeNotMatch,
+                DiagnosticCode::ParamTypeMismatch,
                 range,
                 t!(
                     "expected `%{source}` but found `%{found}`. %{reason}",

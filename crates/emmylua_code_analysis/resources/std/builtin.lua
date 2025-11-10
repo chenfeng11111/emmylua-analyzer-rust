@@ -138,3 +138,49 @@
 ---@alias TypeGuard<T> boolean
 
 ---@alias Language<T: string> string
+
+--- Get the parameters of a function as a tuple
+---@alias Parameters<T extends function> T extends (fun(...: infer P): any) and P or never
+
+--- Get the parameters of a constructor as a tuple
+---@alias ConstructorParameters<T> T extends new (fun(...: infer P): any) and P or never
+
+--- Make all properties in T optional
+---@alias Partial<T> { [P in keyof T]?: T[P]; }
+
+--- attribute
+
+--- Deprecated. Receives an optional message parameter.
+---@attribute deprecated(message: string?)
+
+--- Language Server Optimization Items.
+---
+--- Parameters:
+--- - `check_table_field`: Skip the assign check for table fields. It is recommended to use this option for all large configuration tables.
+--- - `delayed_definition`: Indicates that the type of the variable is determined by the first assignment.
+---    Only valid for `local` declarations with no initial value.
+---@attribute lsp_optimization(code: "check_table_field"|"delayed_definition")
+
+--- Index field alias, will be displayed in `hint` and `completion`.
+---
+--- Receives a string parameter for the alias name.
+---@attribute index_alias(name: string)
+
+--- This attribute must be applied to function parameters, and the function parameter's type must be a string template generic,
+--- used to specify the default constructor of a class.
+---
+--- Parameters:
+--- - `name`: The name of the method as a constructor.
+--- - `root_class`: Used to mark the root class, will implicitly inherit this class, such as `System.Object` in c#. Defaults to empty.
+--- - `strip_self`: Whether the `self` parameter can be omitted when calling the constructor, defaults to `true`
+--- - `return_self`: Whether the constructor is forced to return `self`, defaults to `true`
+---@attribute constructor(name: string, root_class: string?, strip_self: boolean?, return_self: boolean?)
+
+--- Associates `getter` and `setter` methods with a field. Currently provides only definition navigation functionality,
+--- and the target methods must reside within the same class.
+---
+--- Parameters:
+--- - `convention`: Naming convention, defaults to `camelCase`. Implicitly adds `get` and `set` prefixes. eg: `_age` -> `getAge`, `setAge`.
+--- - `getter`: Getter method name. Takes precedence over `convention`.
+--- - `setter`: Setter method name. Takes precedence over `convention`.
+---@attribute field_accessor(convention: "camelCase"|"PascalCase"|"snake_case"|nil, getter: string?, setter: string?)

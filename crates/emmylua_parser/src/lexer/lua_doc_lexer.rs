@@ -27,6 +27,9 @@ pub enum LuaDocLexerState {
     Source,
     NormalDescription,
     CastExpr,
+    AttributeUse,
+    Mapped,
+    Extends,
 }
 
 impl LuaDocLexer<'_> {
@@ -73,6 +76,9 @@ impl LuaDocLexer<'_> {
             LuaDocLexerState::Source => self.lex_source(),
             LuaDocLexerState::NormalDescription => self.lex_normal_description(),
             LuaDocLexerState::CastExpr => self.lex_cast_expr(),
+            LuaDocLexerState::AttributeUse => self.lex_attribute_use(),
+            LuaDocLexerState::Mapped => self.lex_mapped(),
+            LuaDocLexerState::Extends => self.lex_extends(),
         }
     }
 
@@ -147,6 +153,15 @@ impl LuaDocLexer<'_> {
                 reader.eat_while(is_name_continue);
                 let text = reader.current_text();
                 to_tag(text)
+            }
+            '[' => {
+                reader.bump();
+                self.state = LuaDocLexerState::AttributeUse;
+                LuaTokenKind::TkDocAttributeUse
+            }
+            '<' => {
+                reader.bump();
+                LuaTokenKind::TkCallGeneric
             }
             _ => {
                 reader.eat_while(|_| true);
@@ -272,9 +287,20 @@ impl LuaDocLexer<'_> {
                     _ => LuaTokenKind::TkDocTrivia,
                 }
             }
-            '#' | '@' => {
+            '#' => {
                 reader.eat_while(|_| true);
                 LuaTokenKind::TkDocDetail
+            }
+            '@' => {
+                reader.bump();
+                // 需要检查是否在使用 Attribute 语法
+                if reader.current_char() == '[' {
+                    reader.bump();
+                    LuaTokenKind::TkDocAttributeUse
+                } else {
+                    reader.eat_while(|_| true);
+                    LuaTokenKind::TkDocDetail
+                }
             }
             ch if ch.is_ascii_digit() => {
                 reader.eat_while(|ch| ch.is_ascii_digit());
@@ -581,6 +607,94 @@ impl LuaDocLexer<'_> {
             _ => self.lex_normal(),
         }
     }
+
+    fn lex_attribute_use(&mut self) -> LuaTokenKind {
+        let reader = self.reader.as_mut().unwrap();
+        match reader.current_char() {
+            ch if is_doc_whitespace(ch) => {
+                reader.eat_while(is_doc_whitespace);
+                LuaTokenKind::TkWhitespace
+            }
+            '(' => {
+                reader.bump();
+                LuaTokenKind::TkLeftParen
+            }
+            ')' => {
+                reader.bump();
+                LuaTokenKind::TkRightParen
+            }
+            ',' => {
+                reader.bump();
+                LuaTokenKind::TkComma
+            }
+            ']' => {
+                reader.bump();
+                LuaTokenKind::TkRightBracket
+            }
+            ch if ch == '"' || ch == '\'' => {
+                reader.bump();
+                reader.eat_while(|c| c != ch);
+                if reader.current_char() == ch {
+                    reader.bump();
+                }
+                LuaTokenKind::TkString
+            }
+            ch if ch.is_ascii_digit() => {
+                reader.eat_while(|ch| ch.is_ascii_digit());
+                LuaTokenKind::TkInt
+            }
+            ch if is_name_start(ch) => {
+                reader.bump();
+                reader.eat_while(is_name_continue);
+                let text = reader.current_text();
+                if text == "nil" {
+                    LuaTokenKind::TkNil
+                } else {
+                    LuaTokenKind::TkName
+                }
+            }
+            _ => {
+                reader.bump();
+                LuaTokenKind::TkDocTrivia
+            }
+        }
+    }
+
+    fn lex_mapped(&mut self) -> LuaTokenKind {
+        let reader = self.reader.as_mut().unwrap();
+        match reader.current_char() {
+            ch if is_doc_whitespace(ch) => {
+                reader.eat_while(is_doc_whitespace);
+                LuaTokenKind::TkWhitespace
+            }
+            ch if is_name_start(ch) => {
+                let (text, _) = read_doc_name(reader);
+                match text {
+                    "readonly" => LuaTokenKind::TkDocReadonly,
+                    _ => LuaTokenKind::TkName,
+                }
+            }
+            _ => self.lex_normal(),
+        }
+    }
+
+    fn lex_extends(&mut self) -> LuaTokenKind {
+        let reader = self.reader.as_mut().unwrap();
+        match reader.current_char() {
+            ch if is_doc_whitespace(ch) => {
+                reader.eat_while(is_doc_whitespace);
+                LuaTokenKind::TkWhitespace
+            }
+            ch if is_name_start(ch) => {
+                let (text, _) = read_doc_name(reader);
+                match text {
+                    "new" => LuaTokenKind::TkDocNew,
+                    _ => LuaTokenKind::TkName,
+                }
+            }
+            _ => self.lex_normal(),
+        }
+    }
 }
 
 fn to_tag(text: &str) -> LuaTokenKind {
@@ -617,6 +731,7 @@ fn to_tag(text: &str) -> LuaTokenKind {
         "source" => LuaTokenKind::TkTagSource,
         "export" => LuaTokenKind::TkTagExport,
         "language" => LuaTokenKind::TkLanguage,
+        "attribute" => LuaTokenKind::TkTagAttribute,
         _ => LuaTokenKind::TkTagOther,
     }
 }
@@ -636,6 +751,7 @@ fn to_token_or_name(text: &str) -> LuaTokenKind {
         "keyof" => LuaTokenKind::TkDocKeyOf,
         "extends" => LuaTokenKind::TkDocExtends,
         "as" => LuaTokenKind::TkDocAs,
+        "in" => LuaTokenKind::TkIn,
         "and" => LuaTokenKind::TkAnd,
         "or" => LuaTokenKind::TkOr,
         "else" => LuaTokenKind::TkDocElse,

@@ -9,7 +9,7 @@ use emmylua_code_analysis::{
 
 use crate::handlers::hover::{
     HoverBuilder,
-    hover_humanize::{
+    humanize_types::{
         DescriptionInfo, extract_description_from_property_owner, extract_owner_name_from_element,
         extract_parent_type_from_element, hover_humanize_type,
     },
@@ -313,6 +313,12 @@ fn hover_doc_function_type(
                         builder.semantic_model,
                         Some(&LuaType::Ref(type_decl_id.clone())),
                     );
+                    if is_method {
+                        type_label = "(method) ";
+                        name.push(':');
+                    } else {
+                        name.push('.');
+                    }
                 }
                 LuaMemberOwner::Element(element_id) => {
                     if let Some(LuaType::Ref(type_decl_id) | LuaType::Def(type_decl_id)) =
@@ -326,22 +332,23 @@ fn hover_doc_function_type(
                             builder.semantic_model,
                             Some(&LuaType::Ref(type_decl_id.clone())),
                         );
+                        if is_method {
+                            type_label = "(method) ";
+                            name.push(':');
+                        } else {
+                            name.push('.');
+                        }
                     } else if let Some(owner_name) =
                         extract_owner_name_from_element(builder.semantic_model, element_id)
                     {
                         name.push_str(&owner_name);
+                        name.push('.');
                     }
                 }
                 _ => {}
             }
         }
 
-        if is_method {
-            type_label = "(method) ";
-            name.push(':');
-        } else {
-            name.push('.');
-        }
         if let LuaMemberKey::Name(n) = owner_member.get_key() {
             name.push_str(n.as_str());
         }
@@ -361,11 +368,7 @@ fn hover_doc_function_type(
             if index == 0 && is_method && !func.is_colon_define() {
                 "".to_string()
             } else if let Some(ty) = &param.1 {
-                format!(
-                    "{}: {}",
-                    name,
-                    humanize_type(db, ty, builder.detail_render_level)
-                )
+                format!("{}: {}", name, humanize_type(db, ty, RenderLevel::Simple))
             } else {
                 name.to_string()
             }
@@ -385,6 +388,7 @@ fn convert_function_return_to_docs(func: &LuaFunctionType) -> Vec<LuaDocReturnIn
                 name: None,
                 type_ref: base.clone(),
                 description: None,
+                attributes: None,
             }],
             VariadicType::Multi(types) => types
                 .iter()
@@ -392,6 +396,7 @@ fn convert_function_return_to_docs(func: &LuaFunctionType) -> Vec<LuaDocReturnIn
                     name: None,
                     type_ref: ty.clone(),
                     description: None,
+                    attributes: None,
                 })
                 .collect(),
         },
@@ -399,6 +404,7 @@ fn convert_function_return_to_docs(func: &LuaFunctionType) -> Vec<LuaDocReturnIn
             name: None,
             type_ref: func.get_ret().clone(),
             description: None,
+            attributes: None,
         }],
     }
 }

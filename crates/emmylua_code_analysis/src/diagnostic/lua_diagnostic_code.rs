@@ -18,7 +18,7 @@ pub enum DiagnosticCode {
     /// Missing return statement
     MissingReturn,
     /// Param Type not match
-    ParamTypeNotMatch,
+    ParamTypeMismatch,
     /// Missing parameter
     MissingParameter,
     /// Redundant parameter
@@ -107,6 +107,12 @@ pub enum DiagnosticCode {
     ReadOnly,
     /// Global variable defined in non-module scope
     GlobalInNonModule,
+    /// attribute-param-type-mismatch
+    AttributeParamTypeMismatch,
+    /// attribute-missing-parameter
+    AttributeMissingParameter,
+    /// attribute-redundant-parameter
+    AttributeRedundantParameter,
 
     #[serde(other)]
     None,
@@ -119,7 +125,7 @@ pub fn get_default_severity(code: DiagnosticCode) -> DiagnosticSeverity {
         DiagnosticCode::DocSyntaxError => DiagnosticSeverity::ERROR,
         DiagnosticCode::TypeNotFound => DiagnosticSeverity::WARNING,
         DiagnosticCode::MissingReturn => DiagnosticSeverity::WARNING,
-        DiagnosticCode::ParamTypeNotMatch => DiagnosticSeverity::WARNING,
+        DiagnosticCode::ParamTypeMismatch => DiagnosticSeverity::WARNING,
         DiagnosticCode::MissingParameter => DiagnosticSeverity::WARNING,
         DiagnosticCode::UnreachableCode => DiagnosticSeverity::HINT,
         DiagnosticCode::Unused => DiagnosticSeverity::HINT,

@@ -3,12 +3,12 @@ use std::ops::Deref;
 use emmylua_parser::{LuaAst, LuaAstNode, LuaAstToken, LuaCallExpr, LuaDocTagType, LuaExpr};
 use rowan::TextRange;
 
-use crate::diagnostic::checker::generic::infer_doc_type::infer_doc_type;
 use crate::diagnostic::checker::param_type_check::get_call_source_type;
 use crate::{
-    DiagnosticCode, GenericTplId, LuaDeclExtra, LuaMemberOwner, LuaSemanticDeclId, LuaSignature,
-    LuaStringTplType, LuaType, RenderLevel, SemanticDeclLevel, SemanticModel, TypeCheckFailReason,
-    TypeCheckResult, TypeOps, VariadicType, humanize_type,
+    DiagnosticCode, DocTypeInferContext, GenericTplId, LuaDeclExtra, LuaMemberOwner,
+    LuaSemanticDeclId, LuaSignature, LuaStringTplType, LuaType, RenderLevel, SemanticDeclLevel,
+    SemanticModel, TypeCheckFailReason, TypeCheckResult, TypeOps, VariadicType, humanize_type,
+    infer_doc_type,
 };
 
 use crate::diagnostic::checker::Checker;
@@ -41,8 +41,9 @@ fn check_doc_tag_type(
     doc_tag_type: LuaDocTagType,
 ) -> Option<()> {
     let type_list = doc_tag_type.get_type_list();
+    let doc_ctx = DocTypeInferContext::new(semantic_model.get_db(), semantic_model.get_file_id());
     for doc_type in type_list {
-        let type_ref = infer_doc_type(semantic_model, &doc_type);
+        let type_ref = infer_doc_type(doc_ctx, &doc_type);
         let generic_type = match type_ref {
             LuaType::Generic(generic_type) => generic_type,
             _ => continue,
@@ -201,7 +202,11 @@ fn get_extend_type(
     signature: &LuaSignature,
 ) -> Option<LuaType> {
     match tpl_id {
-        GenericTplId::Func(tpl_id) => signature.generic_params.get(tpl_id as usize)?.1.clone(),
+        GenericTplId::Func(tpl_id) => signature
+            .generic_params
+            .get(tpl_id as usize)?
+            .type_constraint
+            .clone(),
         GenericTplId::Type(tpl_id) => {
             let prefix_expr = call_expr.get_prefix_expr()?;
             let semantic_decl = semantic_model.find_decl(
@@ -391,10 +396,10 @@ fn try_instantiate_arg_type(
                                     .get_db()
                                     .get_signature_index()
                                     .get(&signature_id)?;
-                                if let Some((_, param_type)) =
+                                if let Some(generic_param) =
                                     signature.generic_params.get(tpl_id as usize)
                                 {
-                                    return param_type.clone();
+                                    return generic_param.type_constraint.clone();
                                 }
                             }
                             _ => return None,

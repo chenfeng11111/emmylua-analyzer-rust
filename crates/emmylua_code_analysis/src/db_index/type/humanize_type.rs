@@ -131,13 +131,7 @@ fn humanize_def_type(db: &DbIndex, id: &LuaTypeDeclId, level: RenderLevel) -> St
 
     let generic_names = generic
         .iter()
-        .map(|it| {
-            if it.is_variadic {
-                format!("{}...", it.name)
-            } else {
-                it.name.to_string()
-            }
-        })
+        .map(|it| it.name.to_string())
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}<{}>", full_name, generic_names)
@@ -309,7 +303,8 @@ fn humanize_multi_line_union_type(
         if let Some(description) = description {
             text.push_str(&format!(
                 "    | {} -- {}\n",
-                type_humanize_text, description
+                type_humanize_text,
+                description.replace('\n', " ")
             ));
         } else {
             text.push_str(&format!("    | {}\n", type_humanize_text));
@@ -717,7 +712,7 @@ fn humanize_signature_type(
     let generics = signature
         .generic_params
         .iter()
-        .map(|(name, _)| name.to_string())
+        .map(|generic_param| generic_param.name.to_string())
         .collect::<Vec<_>>()
         .join(", ");
 

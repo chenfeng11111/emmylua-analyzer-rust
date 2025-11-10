@@ -1146,10 +1146,11 @@ mod tests {
     #[gtest]
     fn test_index_key_alias() -> Result<()> {
         let mut ws = ProviderVirtualWorkspace::new();
+        ws.def(" ---@attribute index_alias(name: string)");
         check!(ws.check_completion(
             r#"
                 local export = {
-                    [1] = 1, -- [nameX]
+                    [1] = 1, ---@[index_alias("nameX")]
                 }
 
                 export.<??>
@@ -1215,11 +1216,12 @@ mod tests {
 
     #[gtest]
     fn test_field_index_function() -> Result<()> {
-        let mut ws = ProviderVirtualWorkspace::new();
+        let mut ws = ProviderVirtualWorkspace::new_with_init_std_lib();
         ws.def(
             r#"
                 ---@class A<T>
-                ---@field [1] fun() # [next]
+                ---@[index_alias("next")]
+                ---@field [1] fun()
                 A = {}
             "#,
         );
@@ -2112,6 +2114,80 @@ mod tests {
                     kind: CompletionItemKind::FILE,
                     ..Default::default()
                 },
+            ],
+        ));
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_generic_extends_completion() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        ws.def_file(
+            "std.lua",
+            r#"
+                ---@alias std.type
+                ---| "nil"
+                ---| "number"
+            "#,
+        );
+        ws.def(
+            r#"
+                ---@generic TP: std.type | table
+                ---@param tp `TP`|TP
+                function is_type(tp)
+                end
+            "#,
+        );
+        check!(ws.check_completion_with_kind(
+            r#"
+                is_type(<??>)
+            "#,
+            vec![
+                VirtualCompletionItem {
+                    label: "\"nil\"".to_string(),
+                    kind: CompletionItemKind::ENUM_MEMBER,
+                    ..Default::default()
+                },
+                VirtualCompletionItem {
+                    label: "\"number\"".to_string(),
+                    kind: CompletionItemKind::ENUM_MEMBER,
+                    ..Default::default()
+                },
+            ],
+            CompletionTriggerKind::TRIGGER_CHARACTER,
+        ));
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_generic_partial() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        ws.def(
+            r#"
+        ---@alias Partial<T> { [P in keyof T]?: T[P]; }
+        "#,
+        );
+        check!(ws.check_completion(
+            r#"
+            ---@class AA
+            ---@field a string
+            ---@field b number
+
+            ---@type Partial<AA>
+            local a = {}
+            a.<??>
+            "#,
+            vec![
+                VirtualCompletionItem {
+                    label: "a".to_string(),
+                    kind: CompletionItemKind::VARIABLE,
+                    ..Default::default()
+                },
+                VirtualCompletionItem {
+                    label: "b".to_string(),
+                    kind: CompletionItemKind::VARIABLE,
+                    ..Default::default()
+                }
             ],
         ));
         Ok(())

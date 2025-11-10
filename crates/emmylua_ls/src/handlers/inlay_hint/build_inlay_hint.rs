@@ -17,11 +17,15 @@ use rowan::NodeOrToken;
 
 use rowan::TokenAtOffset;
 
-use crate::handlers::completion::extract_index_member_alias;
+use crate::context::ClientId;
+use crate::handlers::completion::get_index_alias_name;
 use crate::handlers::definition::compare_function_types;
 use crate::handlers::inlay_hint::build_function_hint::{build_closure_hint, build_label_parts};
 
-pub fn build_inlay_hints(semantic_model: &SemanticModel) -> Option<Vec<InlayHint>> {
+pub fn build_inlay_hints(
+    semantic_model: &SemanticModel,
+    client_id: ClientId,
+) -> Option<Vec<InlayHint>> {
     let mut result = Vec::new();
     let root = semantic_model.get_root();
     for node in root.clone().descendants::<LuaAst>() {
@@ -39,6 +43,9 @@ pub fn build_inlay_hints(semantic_model: &SemanticModel) -> Option<Vec<InlayHint
                 build_local_name_hint(semantic_model, &mut result, local_name);
             }
             LuaAst::LuaFuncStat(func_stat) => {
+                if client_id.is_intellij() {
+                    continue;
+                }
                 build_func_stat_override_hint(semantic_model, &mut result, func_stat);
             }
             LuaAst::LuaIndexExpr(index_expr) => {
@@ -426,7 +433,7 @@ fn build_func_stat_override_hint(
     Some(())
 }
 
-fn get_super_member_id(
+pub fn get_super_member_id(
     semantic_model: &SemanticModel,
     super_type: LuaType,
     member_key: &LuaMemberKey,
@@ -449,7 +456,7 @@ fn get_super_member_id(
     None
 }
 
-fn get_override_lsp_location(
+pub fn get_override_lsp_location(
     semantic_model: &SemanticModel,
     file_id: FileId,
     syntax_id: LuaSyntaxId,
@@ -641,7 +648,7 @@ fn build_index_expr_hint(
     let member_infos = semantic_model.get_member_info_with_key(&prefix_type, member_key, false)?;
     let member_info = member_infos.first()?;
     // 尝试提取别名
-    let alias = extract_index_member_alias(semantic_model, member_info)?;
+    let alias = get_index_alias_name(semantic_model, member_info)?;
     // 创建 hint
     let document = semantic_model.get_document();
     let position = {
