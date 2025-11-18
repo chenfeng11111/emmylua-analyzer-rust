@@ -719,7 +719,11 @@ fn infer_union_member(
         }
     }
 
-    Ok(LuaType::from_vec(member_types))
+    if member_types.iter().all(|t| matches!(t, LuaType::Nil)) {
+        Ok(LuaType::Unknown)
+    } else {
+        Ok(LuaType::from_vec(member_types))
+    }
 }
 
 fn infer_intersection_member(
