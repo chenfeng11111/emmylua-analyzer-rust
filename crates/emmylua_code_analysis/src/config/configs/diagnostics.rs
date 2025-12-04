@@ -31,6 +31,9 @@ pub struct EmmyrcDiagnostic {
     /// Delay between opening/changing a file and scanning it for errors, in milliseconds.
     #[schemars(extend("x-vscode-setting" = true))]
     pub diagnostic_interval: Option<u64>,
+    // param names disable check type
+    #[serde(default)]
+    pub disable_check_param_type: Vec<String>,
 }
 
 impl Default for EmmyrcDiagnostic {
@@ -43,6 +46,7 @@ impl Default for EmmyrcDiagnostic {
             severity: HashMap::new(),
             enables: Vec::new(),
             diagnostic_interval: Some(500),
+            disable_check_param_type: Vec::new(),
         }
     }
 }

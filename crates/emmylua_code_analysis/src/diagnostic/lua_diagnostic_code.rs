@@ -113,7 +113,7 @@ pub enum DiagnosticCode {
     AttributeMissingParameter,
     /// attribute-redundant-parameter
     AttributeRedundantParameter,
-
+    UnknownFunctionParam,
     #[serde(other)]
     None,
 }

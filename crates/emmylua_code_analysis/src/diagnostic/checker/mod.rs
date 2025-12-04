@@ -36,6 +36,7 @@ mod unknown_doc_tag;
 mod unnecessary_assert;
 mod unnecessary_if;
 mod unused;
+mod check_param_type;
 
 use emmylua_parser::{
     LuaAstNode, LuaClosureExpr, LuaComment, LuaReturnStat, LuaStat, LuaSyntaxKind,
@@ -124,6 +125,7 @@ pub fn check_file(context: &mut DiagnosticContext, semantic_model: &SemanticMode
     );
     run_check::<readonly_check::ReadOnlyChecker>(context, semantic_model);
     run_check::<global_non_module::GlobalInNonModuleChecker>(context, semantic_model);
+    run_check::<check_param_type::CheckParamType>(context, semantic_model);
     Some(())
 }
 
