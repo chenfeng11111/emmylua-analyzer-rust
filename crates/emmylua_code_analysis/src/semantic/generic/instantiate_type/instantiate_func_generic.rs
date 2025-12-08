@@ -15,7 +15,7 @@ use crate::{
             instantiate_type::instantiate_doc_function,
             tpl_context::TplContext,
             tpl_pattern::{
-                constant_decay, multi_param_tpl_pattern_match_multi_return, tpl_pattern_match,
+                multi_param_tpl_pattern_match_multi_return, tpl_pattern_match,
                 variadic_tpl_pattern_match,
             },
         },
@@ -76,6 +76,7 @@ pub fn instantiate_func_generic(
         if let Some(type_list) = call_expr.get_call_generic_type_list() {
             apply_call_generic_type_list(db, file_id, &mut context, &type_list);
         } else {
+            // 没有指定泛型, 从调用参数中推断
             infer_generic_types_from_call(
                 db,
                 &mut context,
@@ -109,7 +110,7 @@ fn apply_call_generic_type_list(
         let typ = infer_doc_type(doc_ctx, &doc_type);
         context
             .substitutor
-            .insert_type(GenericTplId::Func(i as u32), typ);
+            .insert_type(GenericTplId::Func(i as u32), typ, true);
     }
 }
 
@@ -160,13 +161,12 @@ fn infer_generic_types_from_call(
         }
 
         let arg_type = infer_expr(db, context.cache, call_arg_expr.clone())?;
-
         match (func_param_type, &arg_type) {
             (LuaType::Variadic(variadic), _) => {
                 let mut arg_types = vec![];
                 for arg_expr in &arg_exprs[i..] {
                     let arg_type = infer_expr(db, context.cache, arg_expr.clone())?;
-                    arg_types.push(constant_decay(arg_type));
+                    arg_types.push(arg_type);
                 }
                 variadic_tpl_pattern_match(context, variadic, &arg_types)?;
                 break;
@@ -209,6 +209,7 @@ pub fn build_self_type(db: &DbIndex, self_type: &LuaType) -> LuaType {
                         params.push(LuaType::TplRef(Arc::new(GenericTpl::new(
                             GenericTplId::Type(i as u32),
                             ArcIntern::new(generic_param.name.clone()),
+                            None,
                         ))));
                     }
                 }

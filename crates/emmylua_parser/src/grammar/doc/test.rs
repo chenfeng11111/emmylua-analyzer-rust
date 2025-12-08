@@ -2981,7 +2981,7 @@ Syntax(Chunk)@0..69
             Token(TkDocExtends)@37..44 "extends"
             Token(TkWhitespace)@44..45 " "
             Syntax(TypeInfer)@45..52
-              Token(TkName)@45..50 "infer"
+              Token(TkDocInfer)@45..50 "infer"
               Token(TkWhitespace)@50..51 " "
               Syntax(DocGenericParameter)@51..52
                 Token(TkName)@51..52 "P"
@@ -3039,7 +3039,7 @@ Syntax(Chunk)@0..106
                 Token(TkColon)@64..65 ":"
                 Token(TkWhitespace)@65..66 " "
                 Syntax(TypeInfer)@66..73
-                  Token(TkName)@66..71 "infer"
+                  Token(TkDocInfer)@66..71 "infer"
                   Token(TkWhitespace)@71..72 " "
                   Syntax(DocGenericParameter)@72..73
                     Token(TkName)@72..73 "P"
@@ -3251,7 +3251,7 @@ Syntax(Chunk)@0..106
                 Token(TkColon)@66..67 ":"
                 Token(TkWhitespace)@67..68 " "
                 Syntax(TypeInfer)@68..75
-                  Token(TkName)@68..73 "infer"
+                  Token(TkDocInfer)@68..73 "infer"
                   Token(TkWhitespace)@73..74 " "
                   Syntax(DocGenericParameter)@74..75
                     Token(TkName)@74..75 "P"
@@ -3321,6 +3321,66 @@ Syntax(Chunk)@0..60
     Token(TkEndOfLine)@53..54 "\n"
     Token(TkWhitespace)@54..60 "      "
 "#;
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_fun_generic_type() {
+        let code = r#"
+        ---@type fun<T, R: Foo>(value: T, other: R): R
+        "#;
+
+        let result = r#"
+Syntax(Chunk)@0..64
+  Syntax(Block)@0..64
+    Token(TkEndOfLine)@0..1 "\n"
+    Token(TkWhitespace)@1..9 "        "
+    Syntax(Comment)@9..55
+      Token(TkDocStart)@9..13 "---@"
+      Syntax(DocTagType)@13..55
+        Token(TkTagType)@13..17 "type"
+        Token(TkWhitespace)@17..18 " "
+        Syntax(TypeFun)@18..55
+          Token(TkName)@18..21 "fun"
+          Syntax(DocGenericDeclareList)@21..32
+            Token(TkLt)@21..22 "<"
+            Syntax(DocGenericParameter)@22..23
+              Token(TkName)@22..23 "T"
+            Token(TkComma)@23..24 ","
+            Token(TkWhitespace)@24..25 " "
+            Syntax(DocGenericParameter)@25..31
+              Token(TkName)@25..26 "R"
+              Token(TkColon)@26..27 ":"
+              Token(TkWhitespace)@27..28 " "
+              Syntax(TypeName)@28..31
+                Token(TkName)@28..31 "Foo"
+            Token(TkGt)@31..32 ">"
+          Token(TkLeftParen)@32..33 "("
+          Syntax(DocTypedParameter)@33..41
+            Token(TkName)@33..38 "value"
+            Token(TkColon)@38..39 ":"
+            Token(TkWhitespace)@39..40 " "
+            Syntax(TypeName)@40..41
+              Token(TkName)@40..41 "T"
+          Token(TkComma)@41..42 ","
+          Token(TkWhitespace)@42..43 " "
+          Syntax(DocTypedParameter)@43..51
+            Token(TkName)@43..48 "other"
+            Token(TkColon)@48..49 ":"
+            Token(TkWhitespace)@49..50 " "
+            Syntax(TypeName)@50..51
+              Token(TkName)@50..51 "R"
+          Token(TkRightParen)@51..52 ")"
+          Token(TkColon)@52..53 ":"
+          Token(TkWhitespace)@53..54 " "
+          Syntax(DocTypeList)@54..55
+            Syntax(DocNamedReturnType)@54..55
+              Syntax(TypeName)@54..55
+                Token(TkName)@54..55 "R"
+    Token(TkEndOfLine)@55..56 "\n"
+    Token(TkWhitespace)@56..64 "        "
+        "#;
+
         assert_ast_eq!(code, result);
     }
 }

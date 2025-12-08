@@ -2192,4 +2192,151 @@ mod tests {
         ));
         Ok(())
     }
+
+    #[gtest]
+    fn test_intersection_completion() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Matchers<T>
+
+            ---@class Inverse<T>
+            ---@field negate T
+
+            ---@class Assertions<T>: Matchers<T> & Inverse<T>
+        "#,
+        );
+        check!(ws.check_completion(
+            r#"
+            ---@type Assertions<number>
+            local t
+            t.<??>
+            "#,
+            vec![VirtualCompletionItem {
+                label: "negate".to_string(),
+                kind: CompletionItemKind::VARIABLE,
+                ..Default::default()
+            },],
+        ));
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_super_generic() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        check!(ws.check_completion(
+            r#"
+            ---@class box<T>: T
+
+            ---@class AAA
+            ---@field a number
+
+            ---@type box<AAA>
+            local a = {}
+            a.<??>
+            "#,
+            vec![VirtualCompletionItem {
+                label: "a".to_string(),
+                kind: CompletionItemKind::VARIABLE,
+                ..Default::default()
+            },],
+        ));
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_keyof_enum() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        check!(ws.check_completion(
+            r#"
+            ---@enum A
+            local styles = {
+                reset = 1
+            }
+
+            ---@type table<keyof A, string>
+            local t
+            t.<??>
+            "#,
+            vec![VirtualCompletionItem {
+                label: "reset".to_string(),
+                kind: CompletionItemKind::VARIABLE,
+                ..Default::default()
+            },],
+        ));
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_generic_constraint() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias std.RawGet<T, K> unknown
+
+            ---@alias std.ConstTpl<T> unknown
+
+            ---@generic T, K extends keyof T
+            ---@param object T
+            ---@param key K
+            ---@return std.RawGet<T, K>
+            function pick(object, key)
+            end
+
+            ---@class Person
+            ---@field age integer
+        "#,
+        );
+
+        check!(ws.check_completion_with_kind(
+            r#"
+            ---@type Person
+            local person
+
+            pick(person, <??>)
+            "#,
+            vec![VirtualCompletionItem {
+                label: "\"age\"".to_string(),
+                kind: CompletionItemKind::VARIABLE,
+                ..Default::default()
+            },],
+            CompletionTriggerKind::TRIGGER_CHARACTER
+        ),);
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_generic_constraint_inline_object_completion() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic T, K extends keyof T
+            ---@param object T
+            ---@param key K
+            function pick(object, key)
+            end
+            "#,
+        );
+
+        check!(ws.check_completion_with_kind(
+            r#"
+            pick({ foo = 1, bar = 2 }, <??>)
+            "#,
+            vec![
+                VirtualCompletionItem {
+                    label: "\"bar\"".to_string(),
+                    kind: CompletionItemKind::CONSTANT,
+                    ..Default::default()
+                },
+                VirtualCompletionItem {
+                    label: "\"foo\"".to_string(),
+                    kind: CompletionItemKind::CONSTANT,
+                    ..Default::default()
+                },
+            ],
+            CompletionTriggerKind::TRIGGER_CHARACTER
+        ));
+
+        Ok(())
+    }
 }

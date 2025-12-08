@@ -179,8 +179,14 @@ impl Hash for LuaType {
                 let ptr = Arc::as_ptr(a);
                 (31, ptr).hash(state)
             }
-            LuaType::TplRef(a) => (32, a).hash(state),
-            LuaType::StrTplRef(a) => (33, a).hash(state),
+            LuaType::TplRef(a) => {
+                let ptr = Arc::as_ptr(a);
+                (32, ptr).hash(state)
+            }
+            LuaType::StrTplRef(a) => {
+                let ptr = Arc::as_ptr(a);
+                (33, ptr).hash(state)
+            }
             LuaType::Variadic(a) => {
                 let ptr = Arc::as_ptr(a);
                 (34, ptr).hash(state)
@@ -201,7 +207,10 @@ impl Hash for LuaType {
             }
             LuaType::Never => 45.hash(state),
             LuaType::ConstructorFunction(a) => (99, a).hash(state),
-            LuaType::ConstTplRef(a) => (46, a).hash(state),
+            LuaType::ConstTplRef(a) => {
+                let ptr = Arc::as_ptr(a);
+                (46, ptr).hash(state)
+            }
             LuaType::Language(a) => (47, a).hash(state),
             LuaType::ModuleRef(a) => (48, a).hash(state),
             LuaType::Conditional(a) => {
@@ -496,6 +505,10 @@ impl LuaType {
             }
         }
     }
+
+    pub fn is_module_ref(&self) -> bool {
+        matches!(self, LuaType::ModuleRef(_))
+    }
 }
 
 impl TypeVisitTrait for LuaType {
@@ -716,8 +729,11 @@ impl LuaFunctionType {
                             {
                                 return false;
                             }
-
-                            semantic_model.type_check(owner_type, t).is_ok()
+                            if semantic_model.type_check(owner_type, t).is_ok() {
+                                return true;
+                            }
+                            // 如果名称是`self`, 则做更宽泛的检查
+                            name == "self" && semantic_model.type_check(t, owner_type).is_ok()
                         }
                         None => name == "self",
                     }
@@ -1339,15 +1355,24 @@ impl GenericTplId {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericTpl {
     tpl_id: GenericTplId,
     name: ArcIntern<SmolStr>,
+    constraint: Option<LuaType>,
 }
 
 impl GenericTpl {
-    pub fn new(tpl_id: GenericTplId, name: ArcIntern<SmolStr>) -> Self {
-        Self { tpl_id, name }
+    pub fn new(
+        tpl_id: GenericTplId,
+        name: ArcIntern<SmolStr>,
+        constraint: Option<LuaType>,
+    ) -> Self {
+        Self {
+            tpl_id,
+            name,
+            constraint,
+        }
     }
 
     pub fn get_tpl_id(&self) -> GenericTplId {
@@ -1357,23 +1382,35 @@ impl GenericTpl {
     pub fn get_name(&self) -> &str {
         &self.name
     }
+
+    pub fn get_constraint(&self) -> Option<&LuaType> {
+        self.constraint.as_ref()
+    }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LuaStringTplType {
     prefix: ArcIntern<String>,
     tpl_id: GenericTplId,
     name: ArcIntern<String>,
     suffix: ArcIntern<String>,
+    constraint: Option<LuaType>,
 }
 
 impl LuaStringTplType {
-    pub fn new(prefix: &str, name: &str, tpl_id: GenericTplId, suffix: &str) -> Self {
+    pub fn new(
+        prefix: &str,
+        name: &str,
+        tpl_id: GenericTplId,
+        suffix: &str,
+        constraint: Option<LuaType>,
+    ) -> Self {
         Self {
             prefix: ArcIntern::new(prefix.to_string()),
             tpl_id,
             name: ArcIntern::new(name.to_string()),
             suffix: ArcIntern::new(suffix.to_string()),
+            constraint,
         }
     }
 
@@ -1391,6 +1428,10 @@ impl LuaStringTplType {
 
     pub fn get_suffix(&self) -> &str {
         &self.suffix
+    }
+
+    pub fn get_constraint(&self) -> Option<&LuaType> {
+        self.constraint.as_ref()
     }
 }
 

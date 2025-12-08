@@ -1334,4 +1334,88 @@ mod test {
         "#
         ));
     }
+
+    #[test]
+    fn test_issue_841() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.check_code_for(
+            DiagnosticCode::ParamTypeMismatch,
+            r#"
+        --- @class B
+        --- @field cmd string
+
+        --- @class A: B
+        --- @field cmd? string
+
+        --- @param x A
+        local function foo(x)
+        end
+
+        foo({})
+        "#,
+        ));
+    }
+
+    #[test]
+    fn test_fix_issue_844() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+        ---@alias Tester fun(customTesters: Tester[]): boolean?
+
+        ---@generic V
+        ---@param t V[]
+        ---@return fun(tbl: any):int, V
+        function ipairs(t) end
+        "#,
+        );
+        assert!(ws.check_code_for(
+            DiagnosticCode::ParamTypeMismatch,
+            r#"
+            ---@param newTesters Tester[]
+            local function addMatchers(newTesters)
+                for _, tester in ipairs(newTesters) do
+                end
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_pairs_1() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+        ---@param value string
+        function aaaa(value)
+        end
+
+        ---@generic K, V
+        ---@param t {[K]: V} | V[]
+        ---@return fun(tbl: any):K, V
+        function pairs(t) end
+        "#,
+        );
+        assert!(!ws.check_code_for(
+            DiagnosticCode::ParamTypeMismatch,
+            r#"
+            ---@type {[string]: number}
+            local matchers = {}
+            for _, matcher in pairs(matchers) do
+                aaaa(matcher)
+            end
+        "#
+        ));
+        assert!(!ws.check_code_for(
+            DiagnosticCode::ParamTypeMismatch,
+            r#"
+            ---@alias MatchersObject {[string]: number}
+            ---@type MatchersObject
+            local matchers = {}
+            for _, matcher in pairs(matchers) do
+                aaaa(matcher)
+            end
+        "#
+        ));
+    }
 }

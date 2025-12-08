@@ -17,8 +17,8 @@ pub fn instantiate_alias_call(
     alias_call: &LuaAliasCallType,
     substitutor: &TypeSubstitutor,
 ) -> LuaType {
-    let operands = alias_call
-        .get_operands()
+    let operand_exprs = alias_call.get_operands();
+    let operands = operand_exprs
         .iter()
         .map(|it| instantiate_type_generic(db, it, substitutor))
         .collect::<Vec<_>>();
@@ -42,7 +42,6 @@ pub fn instantiate_alias_call(
             if operands.len() != 1 {
                 return LuaType::Unknown;
             }
-            // let is_tuple = operands.len() == 1 && operands[0].is_tuple();
 
             let members = get_keyof_members(db, &operands[0]).unwrap_or_default();
             let member_key_types = members
@@ -54,13 +53,6 @@ pub fn instantiate_alias_call(
                 })
                 .collect::<Vec<_>>();
             LuaType::Tuple(LuaTupleType::new(member_key_types, LuaTupleStatus::InferResolve).into())
-            // if is_tuple {
-            //     LuaType::Tuple(
-            //         LuaTupleType::new(member_key_types, LuaTupleStatus::InferResolve).into(),
-            //     )
-            // } else {
-            //     LuaType::from_vec(member_key_types)
-            // }
         }
         // 条件类型不在此处理
         LuaAliasCallKind::Extends => {
@@ -84,15 +76,33 @@ pub fn instantiate_alias_call(
                 return LuaType::Unknown;
             }
 
-            instantiate_rawget_call(db, &operands[0], &operands[1])
+            let key = resolve_literal_operand(operand_exprs.get(1), substitutor)
+                .unwrap_or_else(|| operands[1].clone());
+
+            instantiate_rawget_call(db, &operands[0], &key)
         }
         LuaAliasCallKind::Index => {
             if operands.len() != 2 {
                 return LuaType::Unknown;
             }
 
-            instantiate_index_call(db, &operands[0], &operands[1])
+            let key = resolve_literal_operand(operand_exprs.get(1), substitutor)
+                .unwrap_or_else(|| operands[1].clone());
+
+            instantiate_index_call(db, &operands[0], &key)
         }
+    }
+}
+
+fn resolve_literal_operand(
+    operand: Option<&LuaType>,
+    substitutor: &TypeSubstitutor,
+) -> Option<LuaType> {
+    match operand {
+        Some(LuaType::TplRef(tpl_ref)) | Some(LuaType::ConstTplRef(tpl_ref)) => {
+            substitutor.get_raw_type(tpl_ref.get_tpl_id()).cloned()
+        }
+        _ => None,
     }
 }
 
@@ -285,7 +295,7 @@ fn instantiate_index_call(db: &DbIndex, owner: &LuaType, key: &LuaType) -> LuaTy
     }
 }
 
-fn get_keyof_members(db: &DbIndex, prefix_type: &LuaType) -> Option<Vec<LuaMemberInfo>> {
+pub fn get_keyof_members(db: &DbIndex, prefix_type: &LuaType) -> Option<Vec<LuaMemberInfo>> {
     match prefix_type {
         LuaType::Variadic(variadic) => match variadic.deref() {
             VariadicType::Base(base) => Some(vec![LuaMemberInfo {
