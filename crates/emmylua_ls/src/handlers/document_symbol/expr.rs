@@ -77,7 +77,7 @@ pub fn build_closure_expr_symbol(
             decl.get_range(),
         );
 
-        builder.add_node_symbol(param.syntax().clone(), symbol, Some(effective_parent));
+        // builder.add_node_symbol(param.syntax().clone(), symbol, Some(effective_parent));
     }
 
     Some(effective_parent)

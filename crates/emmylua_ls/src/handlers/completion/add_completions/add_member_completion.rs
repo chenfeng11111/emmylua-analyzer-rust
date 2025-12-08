@@ -56,7 +56,7 @@ pub fn add_member_completion(
                         for key in member_keys {
                             let mut member_info = member_info.clone();
                             member_info.key = key;
-                            add_member_completion(builder, member_info, status, None);
+                            add_member_completion(builder, member_info, status, None, None);
                         }
                     }
                 }

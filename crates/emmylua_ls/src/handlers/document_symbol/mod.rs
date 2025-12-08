@@ -160,30 +160,35 @@ fn process_stat(
                 }
             }
         }
+        // 4. Remove unnecessary if/for symbols, just process their children with current parent_id
         LuaStat::ForStat(for_stat) => {
-            let for_id = build_for_stat_symbol(builder, for_stat.clone(), parent_id)?;
-            process_exprs(builder, for_stat.syntax(), for_id)?;
+            process_exprs(builder, for_stat.syntax(), parent_id)?;
             if let Some(block) = for_stat.get_block() {
-                process_block(builder, block, for_id)?;
+                process_block(builder, block, parent_id)?;
             }
         }
         LuaStat::ForRangeStat(for_range_stat) => {
-            let for_range_id =
-                build_for_range_stat_symbol(builder, for_range_stat.clone(), parent_id)?;
-            process_exprs(builder, for_range_stat.syntax(), for_range_id)?;
+            process_exprs(builder, for_range_stat.syntax(), parent_id)?;
             if let Some(block) = for_range_stat.get_block() {
-                process_block(builder, block, for_range_id)?;
+                process_block(builder, block, parent_id)?;
             }
         }
         LuaStat::IfStat(if_stat) => {
-            let ctx = build_if_stat_symbol(builder, if_stat.clone(), parent_id)?;
             if let Some(condition) = if_stat.get_condition_expr() {
-                process_expr(builder, condition, ctx.if_id, false)?;
+                process_expr(builder, condition, parent_id, false)?;
             }
             if let Some(block) = if_stat.get_block() {
-                process_block(builder, block, ctx.if_id)?;
+                process_block(builder, block, parent_id)?;
             }
-            process_if_clauses(builder, ctx)?;
+            // Process clauses manually to avoid creating symbols
+            for clause in if_stat.get_all_clause() {
+                 if let Some(condition) = clause.get_condition_expr() {
+                    process_expr(builder, condition, parent_id, false)?;
+                }
+                if let Some(block) = clause.get_block() {
+                    process_block(builder, block, parent_id)?;
+                }
+            }
         }
         LuaStat::WhileStat(while_stat) => {
             if let Some(condition) = while_stat.get_condition_expr() {
@@ -202,9 +207,8 @@ fn process_stat(
             }
         }
         LuaStat::DoStat(do_stat) => {
-            let do_id = build_do_stat_symbol(builder, do_stat.clone(), parent_id)?;
             if let Some(block) = do_stat.get_block() {
-                process_block(builder, block, do_id)?;
+                process_block(builder, block, parent_id)?;
             }
         }
         LuaStat::CallExprStat(call_stat) => {
