@@ -66,16 +66,18 @@ fn check_index_expr(
         .unwrap_or(LuaType::Unknown);
     let mut module_info = None;
 
-    let exact = check_exact_field(semantic_model, index_expr).unwrap_or(false);
-    if !exact && is_invalid_prefix_type(&prefix_typ) {
-        if matches!(prefix_typ, LuaType::TableConst(_)) {
-            // 如果导入了被 @export 标记的表常量, 那么不应该跳过检查
-            module_info = check_require_table_const_with_export(semantic_model, index_expr);
-            if module_info.is_none() {
+    if is_invalid_prefix_type(&prefix_typ) {
+        let exact = check_exact_field(semantic_model, index_expr).unwrap_or(false);
+        if !exact {
+            if matches!(prefix_typ, LuaType::TableConst(_)) {
+                // 如果导入了被 @export 标记的表常量, 那么不应该跳过检查
+                module_info = check_require_table_const_with_export(semantic_model, index_expr);
+                if module_info.is_none() {
+                    return Some(());
+                }
+            } else {
                 return Some(());
             }
-        } else {
-            return Some(());
         }
     }
 
@@ -540,15 +542,68 @@ pub fn parse_require_expr_module_info<'a>(
 fn check_exact_field(semantic_model: &SemanticModel, index_expr: &LuaIndexExpr) -> Option<bool> {
     // 获取前缀表达式的语义信息
     let db = semantic_model.get_db();
-    let prefix_expr = index_expr.get_prefix_expr()?;
+    let prefix_expr = &index_expr.get_prefix_expr()?;
 
-    let semantic_decl_id = semantic_model.find_decl(
+    let mut current_semantic_decl_id = semantic_model.find_decl(
         prefix_expr.syntax().clone().into(),
         SemanticDeclLevel::NoTrace,
     )?;
-    let common_property =  db.get_property_index().get_property(&semantic_decl_id)?;
 
-    let exact_field = common_property.find_attribute_use("exact_field");
+    loop {
+        // 1. 检查当前 decl 是否有 exact_field
+        if let Some(common_property) = db.get_property_index().get_property(&current_semantic_decl_id) {
+            if common_property.find_attribute_use("exact_field").is_some() {
+                return Some(true);
+            }
+        }
 
-    Some(exact_field.is_some())
+        // 2. 如果没有，尝试获取 origin owner
+        match current_semantic_decl_id {
+            LuaSemanticDeclId::LuaDecl(decl_id) => {
+                // 如果能找到 origin owner，更新 current_semantic_decl_id 并继续循环
+                if let Some(owner_decl_id) = find_decl_origin_owners(semantic_model, decl_id) {
+                    // 只有当 origin owner 和当前不同的时候才继续，防止死循环 (取决于 find_decl_origin_owners 的实现，加个判断更安全)
+                    if owner_decl_id != current_semantic_decl_id {
+                        current_semantic_decl_id = owner_decl_id;
+                        continue;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // 3. 如果没有找到 exact_field 且没有上级 owner，则返回 false (Some(false) 表示找到了结果但结果为否)
+        // 注意：根据你原本的代码逻辑，最后是 Some(bool)，所以我这里假设最终没找到应该返回 Some(false)
+        return Some(false);
+    }
+}
+
+fn find_decl_origin_owners(
+    semantic_model: &SemanticModel,
+    decl_id: crate::LuaDeclId,
+) -> Option<LuaSemanticDeclId> {
+    let db = semantic_model.get_db();
+
+    let node = db
+        .get_vfs()
+        .get_syntax_tree(&decl_id.file_id)
+        .and_then(|tree| {
+            let root = tree.get_red_root();
+            db.get_decl_index()
+                .get_decl(&decl_id)
+                .and_then(|decl| decl.get_value_syntax_id())
+                .and_then(|syntax_id| syntax_id.to_node_from_root(&root))
+        });
+
+    if let Some(node) = node {
+        let semantic_decl = semantic_model.find_decl(node.into(), SemanticDeclLevel::default());
+        match semantic_decl {
+            Some(LuaSemanticDeclId::LuaDecl(decl_id)) => {
+                Some(LuaSemanticDeclId::LuaDecl(decl_id))
+            }
+            _ => None
+        }
+    } else {
+        None
+    }
 }
