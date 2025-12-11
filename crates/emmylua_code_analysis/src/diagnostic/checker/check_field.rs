@@ -66,7 +66,8 @@ fn check_index_expr(
         .unwrap_or(LuaType::Unknown);
     let mut module_info = None;
 
-    if is_invalid_prefix_type(&prefix_typ) {
+    let exact = check_exact_field(semantic_model, index_expr).unwrap_or(false);
+    if !exact && is_invalid_prefix_type(&prefix_typ) {
         if matches!(prefix_typ, LuaType::TableConst(_)) {
             // 如果导入了被 @export 标记的表常量, 那么不应该跳过检查
             module_info = check_require_table_const_with_export(semantic_model, index_expr);
@@ -534,4 +535,20 @@ pub fn parse_require_expr_module_info<'a>(
         .get_db()
         .get_module_index()
         .find_module(&module_path)
+}
+
+fn check_exact_field(semantic_model: &SemanticModel, index_expr: &LuaIndexExpr) -> Option<bool> {
+    // 获取前缀表达式的语义信息
+    let db = semantic_model.get_db();
+    let prefix_expr = index_expr.get_prefix_expr()?;
+
+    let semantic_decl_id = semantic_model.find_decl(
+        prefix_expr.syntax().clone().into(),
+        SemanticDeclLevel::NoTrace,
+    )?;
+    let common_property =  db.get_property_index().get_property(&semantic_decl_id)?;
+
+    let exact_field = common_property.find_attribute_use("exact_field");
+
+    Some(exact_field.is_some())
 }
