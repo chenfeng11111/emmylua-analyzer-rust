@@ -1,7 +1,3 @@
-use crate::handlers::completion::{
-    completion_builder::CompletionBuilder, completion_data::CompletionData,
-    providers::get_function_remove_nil,
-};
 use emmylua_code_analysis::{
     DbIndex, LuaAliasCallKind, LuaMemberInfo, LuaMemberKey, LuaSemanticDeclId, LuaType,
     SemanticModel, get_keyof_members, try_extract_signature_id_from_field,
@@ -132,7 +128,7 @@ pub fn add_member_completion(
 
     let completion_kind = get_completion_kind(&typ);
     let emmyrc = builder.semantic_model.get_emmyrc();
-    let insert_text = get_function_insert_text(
+    let insert_text = crate::handlers::completion::add_completions::get_function_insert_text(
         builder,
         call_display,
         &label,
@@ -245,7 +241,7 @@ fn add_signature_overloads(
             };
             let completion_kind = get_completion_kind(&typ);
             let emmyrc = builder.semantic_model.get_emmyrc();
-            let insert_text = get_function_insert_text(
+            let insert_text = crate::handlers::completion::add_completions::get_function_insert_text(
                 builder,
                 call_display,
                 &label,

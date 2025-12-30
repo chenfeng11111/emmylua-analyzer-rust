@@ -294,8 +294,9 @@ fn infer_custom_type_member(
                     }
                 }
 
-                return Ok(LuaType::ConstructorFunction(LuaFunctionType::new(
-                    AsyncState::None,
+                return Ok(LuaType::ConstructorFunction(crate::LuaFunctionType::new(
+                    crate::AsyncState::None,
+                    false,
                     false,
                     params,
                     LuaType::SelfInfer

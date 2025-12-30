@@ -489,7 +489,7 @@ fn check_exact_field(semantic_model: &SemanticModel, index_expr: &LuaIndexExpr) 
 
     let mut current_semantic_decl_id = semantic_model.find_decl(
         prefix_expr.syntax().clone().into(),
-        SemanticDeclLevel::NoTrace,
+        crate::SemanticDeclLevel::NoTrace,
     )?;
 
     loop {
@@ -502,7 +502,7 @@ fn check_exact_field(semantic_model: &SemanticModel, index_expr: &LuaIndexExpr) 
 
         // 2. 如果没有，尝试获取 origin owner
         match current_semantic_decl_id {
-            LuaSemanticDeclId::LuaDecl(decl_id) => {
+            crate::LuaSemanticDeclId::LuaDecl(decl_id) => {
                 // 如果能找到 origin owner，更新 current_semantic_decl_id 并继续循环
                 if let Some(owner_decl_id) = find_decl_origin_owners(semantic_model, decl_id) {
                     // 只有当 origin owner 和当前不同的时候才继续，防止死循环 (取决于 find_decl_origin_owners 的实现，加个判断更安全)
@@ -524,7 +524,7 @@ fn check_exact_field(semantic_model: &SemanticModel, index_expr: &LuaIndexExpr) 
 fn find_decl_origin_owners(
     semantic_model: &SemanticModel,
     decl_id: crate::LuaDeclId,
-) -> Option<LuaSemanticDeclId> {
+) -> Option<crate::LuaSemanticDeclId> {
     let db = semantic_model.get_db();
 
     let node = db
@@ -539,10 +539,10 @@ fn find_decl_origin_owners(
         });
 
     if let Some(node) = node {
-        let semantic_decl = semantic_model.find_decl(node.into(), SemanticDeclLevel::default());
+        let semantic_decl = semantic_model.find_decl(node.into(), crate::SemanticDeclLevel::default());
         match semantic_decl {
-            Some(LuaSemanticDeclId::LuaDecl(decl_id)) => {
-                Some(LuaSemanticDeclId::LuaDecl(decl_id))
+            Some(crate::LuaSemanticDeclId::LuaDecl(decl_id)) => {
+                Some(crate::LuaSemanticDeclId::LuaDecl(decl_id))
             }
             _ => None
         }
