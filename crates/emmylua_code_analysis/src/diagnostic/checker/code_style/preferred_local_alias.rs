@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use emmylua_parser::{
-    LuaAst, LuaAstNode, LuaAstToken, LuaExpr, LuaIndexExpr, LuaIndexKey, LuaLocalStat,
-    LuaSyntaxKind,
+    LuaAst, LuaAstNode, LuaAstToken, LuaExpr, LuaIndexExpr, LuaLocalStat, LuaSyntaxKind, PathTrait,
 };
 use rowan::{NodeOrToken, TextRange};
 use serde_json::json;
@@ -82,14 +81,11 @@ fn collect_local_alias(
                 continue;
             }
 
-            let name = match value_expr {
-                LuaExpr::IndexExpr(index_expr) => {
-                    let index_key = index_expr.get_index_key()?;
-                    match index_key {
-                        LuaIndexKey::Name(name_token) => name_token.get_name_text().to_string(),
-                        _ => continue,
-                    }
-                }
+            let access_path = match value_expr {
+                LuaExpr::IndexExpr(index_expr) => match index_expr.get_access_path() {
+                    Some(p) => p,
+                    None => continue,
+                },
                 _ => continue,
             };
             let node_or_token = NodeOrToken::Node(value_expr.syntax().clone());
@@ -98,14 +94,44 @@ fn collect_local_alias(
             {
                 let name_token = local_name.get_name_token()?;
                 let preferred_name = name_token.get_name_text();
+                let ref_var = match find_ref_var_decl_id(semantic_model, value_expr) {
+                    Some(id) => id,
+                    None => continue,
+                };
 
-                local_alias_set.insert(name, preferred_name.to_string(), semantic_id);
+                local_alias_set.insert(
+                    access_path,
+                    preferred_name.to_string(),
+                    semantic_id,
+                    ref_var,
+                );
                 local_alias_set.add_disable_check(value_expr.get_range());
             }
         }
     }
 
     Some(())
+}
+
+fn find_ref_var_decl_id(
+    semantic_model: &SemanticModel,
+    expr: &LuaExpr,
+) -> Option<LuaSemanticDeclId> {
+    let mut prefix = expr.clone();
+    while let LuaExpr::IndexExpr(index_expr) = prefix {
+        match index_expr.get_prefix_expr() {
+            Some(LuaExpr::NameExpr(name_expr)) => {
+                let node_or_token = NodeOrToken::Node(name_expr.syntax().clone());
+                return semantic_model.find_decl(node_or_token, SemanticDeclLevel::NoTrace);
+            }
+            Some(LuaExpr::IndexExpr(prefix_index_expr)) => {
+                prefix = LuaExpr::IndexExpr(prefix_index_expr);
+            }
+            _ => return None,
+        }
+    }
+
+    None
 }
 
 fn is_only_dot_index_expr(expr: &LuaExpr) -> Option<bool> {
@@ -129,6 +155,19 @@ fn is_only_dot_index_expr(expr: &LuaExpr) -> Option<bool> {
     }
 }
 
+fn get_first_name_expr(expr: &LuaIndexExpr) -> Option<LuaExpr> {
+    let mut index_expr = expr.clone();
+    loop {
+        match index_expr.get_prefix_expr() {
+            Some(LuaExpr::NameExpr(name_expr)) => return Some(LuaExpr::NameExpr(name_expr)),
+            Some(LuaExpr::IndexExpr(prefix_index_expr)) => {
+                index_expr = prefix_index_expr;
+            }
+            _ => return None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct LocalAliasSet {
     local_alias_stack: Vec<HashMap<String, LocalAliasInfo>>,
@@ -137,7 +176,8 @@ struct LocalAliasSet {
 
 #[derive(Debug)]
 struct LocalAliasInfo {
-    pub decl_id: LuaSemanticDeclId,
+    pub ref_var: LuaSemanticDeclId,
+    pub ref_field: LuaSemanticDeclId,
     pub preferred_name: String,
     pub invalid: bool,
 }
@@ -158,12 +198,19 @@ impl LocalAliasSet {
         self.local_alias_stack.pop();
     }
 
-    fn insert(&mut self, name: String, preferred_name: String, decl_id: LuaSemanticDeclId) {
+    fn insert(
+        &mut self,
+        access_path: String,
+        preferred_name: String,
+        decl_id: LuaSemanticDeclId,
+        ref_var: LuaSemanticDeclId,
+    ) {
         if let Some(map) = self.local_alias_stack.last_mut() {
             map.insert(
-                name,
+                access_path,
                 LocalAliasInfo {
-                    decl_id,
+                    ref_var,
+                    ref_field: decl_id,
                     preferred_name,
                     invalid: false,
                 },
@@ -171,9 +218,9 @@ impl LocalAliasSet {
         }
     }
 
-    fn get(&mut self, name: &str) -> Option<&mut LocalAliasInfo> {
+    fn get(&mut self, access_path: &str) -> Option<&mut LocalAliasInfo> {
         for map in self.local_alias_stack.iter_mut().rev() {
-            if let Some(item) = map.get_mut(name) {
+            if let Some(item) = map.get_mut(access_path) {
                 return Some(item);
             }
         }
@@ -219,40 +266,47 @@ fn check_index_expr_preference(
         _ => {}
     }
 
-    let index_key = index_expr.get_index_key()?;
-    let name = match index_key {
-        LuaIndexKey::Name(name_token) => name_token.get_name_text().to_string(),
-        _ => return Some(()),
-    };
+    let access_path = index_expr.get_access_path()?;
 
-    let alias_info = local_alias_set.get(&name)?;
+    let alias_info = local_alias_set.get(&access_path)?;
     if alias_info.invalid {
         return Some(());
     }
 
-    if semantic_model.is_reference_to(
-        index_expr.syntax().clone(),
-        alias_info.decl_id.clone(),
+    let var_expr = get_first_name_expr(index_expr)?;
+    if !semantic_model.is_reference_to(
+        var_expr.syntax().clone(),
+        alias_info.ref_var.clone(),
         SemanticDeclLevel::NoTrace,
     ) {
-        if mutable_index {
-            alias_info.invalid = true;
-            return Some(());
-        }
-
-        context.add_diagnostic(
-            DiagnosticCode::PreferredLocalAlias,
-            index_expr.get_range(),
-            t!(
-                "Prefer use local alias variable '%{name}'",
-                name = alias_info.preferred_name
-            )
-            .to_string(),
-            Some(json!({
-                "preferredAlias": alias_info.preferred_name.clone(),
-            })),
-        );
+        return Some(());
     }
+
+    if !semantic_model.is_reference_to(
+        index_expr.syntax().clone(),
+        alias_info.ref_field.clone(),
+        SemanticDeclLevel::NoTrace,
+    ) {
+        return Some(());
+    }
+
+    if mutable_index {
+        alias_info.invalid = true;
+        return Some(());
+    }
+
+    context.add_diagnostic(
+        DiagnosticCode::PreferredLocalAlias,
+        index_expr.get_range(),
+        t!(
+            "Prefer use local alias variable '%{name}'",
+            name = alias_info.preferred_name
+        )
+        .to_string(),
+        Some(json!({
+            "preferredAlias": alias_info.preferred_name.clone(),
+        })),
+    );
 
     Some(())
 }

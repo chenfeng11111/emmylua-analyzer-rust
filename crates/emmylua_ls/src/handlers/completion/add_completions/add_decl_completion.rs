@@ -2,7 +2,8 @@ use emmylua_code_analysis::{DbIndex, LuaDeclId, LuaSemanticDeclId, LuaType};
 use lsp_types::{CompletionItem, InsertTextFormat};
 
 use crate::handlers::completion::{
-    completion_builder::CompletionBuilder, completion_data::CompletionData,
+    add_completions::get_function_snippet, completion_builder::CompletionBuilder,
+    completion_data::CompletionData,
 };
 
 use super::{CallDisplay, check_visibility, get_completion_kind, get_description, get_detail, is_deprecated, get_function_insert_text};
@@ -42,6 +43,13 @@ pub fn add_decl_completion(
 
     if is_deprecated(builder, property_owner.clone()) {
         completion_item.deprecated = Some(true);
+    }
+
+    if builder.support_snippets(typ) {
+        if let Some(snippet) = get_function_snippet(builder, name, typ, CallDisplay::None) {
+            completion_item.insert_text = Some(snippet);
+            completion_item.insert_text_format = Some(lsp_types::InsertTextFormat::SNIPPET);
+        }
     }
 
     builder.add_completion_item(completion_item)?;

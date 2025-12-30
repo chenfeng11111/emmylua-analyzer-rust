@@ -12,7 +12,14 @@ use emmylua_parser::{
 };
 use lsp_types::{CompletionItem, InsertTextFormat};
 
-use super::{check_visibility, get_completion_kind, get_description, get_detail, get_function_insert_text, is_deprecated, CallDisplay};
+use crate::handlers::completion::{
+    add_completions::get_function_snippet, completion_builder::CompletionBuilder,
+    completion_data::CompletionData, providers::get_function_remove_nil,
+};
+
+use super::{
+    CallDisplay, check_visibility, get_completion_kind, get_description, get_detail, is_deprecated,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompletionTriggerStatus {
@@ -38,6 +45,7 @@ pub fn add_member_completion(
     }
 
     let member_key = &member_info.key;
+    let mut can_add_snippet = true;
     let label = match status {
         CompletionTriggerStatus::Dot => match member_key {
             LuaMemberKey::Name(name) => name.to_string(),
@@ -68,15 +76,21 @@ pub fn add_member_completion(
             LuaMemberKey::Name(name) => name.to_string(),
             _ => return None,
         },
-        CompletionTriggerStatus::InString => match member_key {
-            LuaMemberKey::Name(name) => name.to_string(),
-            _ => return None,
-        },
-        CompletionTriggerStatus::LeftBracket => match member_key {
-            LuaMemberKey::Name(name) => format!("\"{}\"", name),
-            LuaMemberKey::Integer(index) => format!("{}", index),
-            _ => return None,
-        },
+        CompletionTriggerStatus::InString => {
+            can_add_snippet = false;
+            match member_key {
+                LuaMemberKey::Name(name) => name.to_string(),
+                _ => return None,
+            }
+        }
+        CompletionTriggerStatus::LeftBracket => {
+            can_add_snippet = false;
+            match member_key {
+                LuaMemberKey::Name(name) => format!("\"{}\"", name),
+                LuaMemberKey::Integer(index) => format!("{}", index),
+                _ => return None,
+            }
+        }
     };
 
     let typ = &member_info.typ;
@@ -165,6 +179,13 @@ pub fn add_member_completion(
             &remove_nil_type,
             call_display,
         );
+    }
+
+    if can_add_snippet && builder.support_snippets(typ) {
+        if let Some(snippet) = get_function_snippet(builder, &label, typ, call_display) {
+            completion_item.insert_text = Some(snippet);
+            completion_item.insert_text_format = Some(lsp_types::InsertTextFormat::SNIPPET);
+        }
     }
 
     // 尝试添加别名补全项, 如果添加成功, 则不添加原来的 `[index]` 补全项
