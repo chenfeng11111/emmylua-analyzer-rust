@@ -182,7 +182,7 @@ fn infer_buildin_or_ref_type(
                 founded = true;
                 name_type_decl.get_id()
             } else {
-                LuaTypeDeclId::new(name)
+                LuaTypeDeclId::global(name)
             };
 
             if !founded {
@@ -347,6 +347,18 @@ fn infer_special_generic_type(
             if let LuaType::DocStringConst(lang_str) = first_param {
                 return Some(LuaType::Language(lang_str));
             }
+        }
+        "Merge" => {
+            let mut params = Vec::new();
+            for param in generic_type.get_generic_types()?.get_types() {
+                params.push(infer_type(analyzer, param));
+            }
+            if params.len() != 2 {
+                return Some(LuaType::Unknown);
+            }
+            return Some(LuaType::Call(
+                LuaAliasCallType::new(LuaAliasCallKind::Merge, params).into(),
+            ));
         }
         _ => {}
     }

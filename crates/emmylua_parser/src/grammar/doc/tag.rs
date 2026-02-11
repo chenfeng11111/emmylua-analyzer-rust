@@ -60,6 +60,7 @@ fn parse_tag_detail(p: &mut LuaDocParser) -> DocParseResult {
         LuaTokenKind::TkTagAttribute => parse_tag_attribute(p),
         LuaTokenKind::TkDocAttributeUse => parse_tag_attribute_use(p, true),
         LuaTokenKind::TkCallGeneric => parse_tag_call_generic(p),
+        LuaTokenKind::TKSchema => parse_tag_schema(p),
 
         // simple tag
         LuaTokenKind::TkTagVisibility => parse_tag_simple(p, LuaSyntaxKind::DocTagVisibility),
@@ -106,7 +107,7 @@ fn parse_tag_class(p: &mut LuaDocParser) -> DocParseResult {
     Ok(m.complete(p))
 }
 
-// (partial, global, local)
+// (partial, global, local, private)
 fn parse_doc_type_flag(p: &mut LuaDocParser) -> DocParseResult {
     let m = p.mark(LuaSyntaxKind::DocTypeFlag);
     p.bump();
@@ -214,12 +215,17 @@ fn parse_enum_field(p: &mut LuaDocParser) -> DocParseResult {
     Ok(m.complete(p))
 }
 
+// ---@alias (private) A
 // ---@alias A string
 // ---@alias A<T> keyof T
 fn parse_tag_alias(p: &mut LuaDocParser) -> DocParseResult {
     p.set_lexer_state(LuaDocLexerState::Normal);
     let m = p.mark(LuaSyntaxKind::DocTagAlias);
     p.bump();
+    if p.current_token() == LuaTokenKind::TkLeftParen {
+        parse_doc_type_flag(p)?;
+    }
+
     expect_token(p, LuaTokenKind::TkName)?;
     if p.current_token() == LuaTokenKind::TkLt {
         parse_generic_decl_list(p, true)?;
@@ -807,5 +813,13 @@ fn parse_tag_call_generic(p: &mut LuaDocParser) -> DocParseResult {
 
     expect_token(p, LuaTokenKind::TkGt)?;
 
+    Ok(m.complete(p))
+}
+
+fn parse_tag_schema(p: &mut LuaDocParser) -> DocParseResult {
+    p.set_lexer_state(LuaDocLexerState::Source);
+    let m = p.mark(LuaSyntaxKind::DocTagSchema);
+    p.bump();
+    expect_token(p, LuaTokenKind::TKDocPath)?;
     Ok(m.complete(p))
 }

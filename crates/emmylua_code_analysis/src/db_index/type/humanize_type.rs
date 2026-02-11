@@ -392,6 +392,7 @@ fn humanize_call_type(db: &DbIndex, inner: &LuaAliasCallType, level: RenderLevel
         LuaAliasCallKind::Unpack => "unpack",
         LuaAliasCallKind::Index => "index",
         LuaAliasCallKind::RawGet => "rawget",
+        LuaAliasCallKind::Merge => "Merge",
     };
     let operands = inner
         .get_operands()

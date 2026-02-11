@@ -157,7 +157,7 @@ fn infer_buildin_or_ref_type(
             {
                 name_type_decl.get_id()
             } else {
-                LuaTypeDeclId::new(name)
+                LuaTypeDeclId::global(name)
             };
 
             LuaType::Ref(type_id)
@@ -275,6 +275,18 @@ fn infer_special_generic_type(
             let first_param = infer_doc_type(ctx, &first_doc_param_type);
 
             return Some(LuaType::TypeGuard(first_param.into()));
+        }
+        "Merge" => {
+            let mut params = Vec::new();
+            for param in generic_type.get_generic_types()?.get_types() {
+                params.push(infer_doc_type(ctx, &param));
+            }
+            if params.len() != 2 {
+                return Some(LuaType::Unknown);
+            }
+            return Some(LuaType::Call(
+                LuaAliasCallType::new(LuaAliasCallKind::Merge, params).into(),
+            ));
         }
         _ => {}
     }

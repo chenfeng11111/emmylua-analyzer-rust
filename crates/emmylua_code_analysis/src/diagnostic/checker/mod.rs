@@ -3,6 +3,7 @@ mod analyze_error;
 mod assign_type_mismatch;
 mod attribute_check;
 mod await_in_sync;
+mod call_non_callable;
 mod cast_type_mismatch;
 mod check_export;
 mod check_field;
@@ -46,10 +47,8 @@ use lsp_types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString};
 use rowan::TextRange;
 use std::sync::Arc;
 
-#[allow(unused)]
 use crate::{
-    FileId, LuaType, Profile, RenderLevel, db_index::DbIndex, humanize_type,
-    semantic::SemanticModel,
+    FileId, LuaType, RenderLevel, db_index::DbIndex, humanize_type, semantic::SemanticModel,
 };
 
 use super::{
@@ -88,6 +87,7 @@ pub fn check_file(context: &mut DiagnosticContext, semantic_model: &SemanticMode
     run_check::<local_const_reassign::LocalConstReassignChecker>(context, semantic_model);
     run_check::<discard_returns::DiscardReturnsChecker>(context, semantic_model);
     run_check::<await_in_sync::AwaitInSyncChecker>(context, semantic_model);
+    run_check::<call_non_callable::CallNonCallableChecker>(context, semantic_model);
     run_check::<missing_fields::MissingFieldsChecker>(context, semantic_model);
     run_check::<param_type_check::ParamTypeCheckChecker>(context, semantic_model);
     run_check::<need_check_nil::NeedCheckNilChecker>(context, semantic_model);
@@ -125,6 +125,7 @@ pub fn check_file(context: &mut DiagnosticContext, semantic_model: &SemanticMode
         context,
         semantic_model,
     );
+    run_check::<code_style::invert_if::InvertIfChecker>(context, semantic_model);
     run_check::<readonly_check::ReadOnlyChecker>(context, semantic_model);
     run_check::<global_non_module::GlobalInNonModuleChecker>(context, semantic_model);
     run_check::<check_param_type::CheckParamType>(context, semantic_model);

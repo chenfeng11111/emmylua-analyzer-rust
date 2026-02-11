@@ -3,7 +3,12 @@ use std::collections::HashMap;
 use crate::{
     LuaMemberKey, LuaMemberOwner, LuaObjectType, LuaTupleType, LuaType, LuaTypeCache, LuaTypeDecl,
     LuaTypeDeclId, RenderLevel, humanize_type,
-    semantic::{member::find_members, type_check::type_check_context::TypeCheckContext},
+    semantic::{
+        member::find_members,
+        type_check::{
+            intersection_utils::intersection_to_object, type_check_context::TypeCheckContext,
+        },
+    },
 };
 
 use super::{
@@ -175,6 +180,18 @@ fn check_ref_class(
             source_id,
             check_guard.next_level()?,
         ),
+        LuaType::Intersection(intersection) => {
+            if let Some(object_type) = intersection_to_object(context.db, intersection) {
+                check_ref_type_compact_object(
+                    context,
+                    &object_type,
+                    source_id,
+                    check_guard.next_level()?,
+                )
+            } else {
+                Err(TypeCheckFailReason::TypeNotMatch)
+            }
+        }
         LuaType::Table => Ok(()),
         LuaType::Union(union_type) => {
             for typ in union_type.into_vec() {
@@ -419,25 +436,38 @@ fn check_ref_type_compact_tuple(
         if context.is_key_checked(&key) {
             continue;
         }
+        match &key {
+            LuaMemberKey::Integer(index) => {
+                // 在 lua 中数组索引从 1 开始, 当数组被解析为元组时也必然从 1 开始
+                if *index <= 0 {
+                    return Err(TypeCheckFailReason::TypeNotMatch);
+                }
 
-        if let LuaMemberKey::Integer(index) = &key {
-            // 在 lua 中数组索引从 1 开始, 当数组被解析为元组时也必然从 1 开始
-            if *index <= 0 {
+                let Some(tuple_type) = tuple_types.get(*index as usize - 1) else {
+                    return Err(TypeCheckFailReason::TypeNotMatch);
+                };
+
+                check_general_type_compact(
+                    context,
+                    &member.typ,
+                    tuple_type,
+                    check_guard.next_level()?,
+                )?;
+            }
+            LuaMemberKey::ExprType(LuaType::Integer) => {
+                // 遍历元组确定所有内容是否匹配
+                for tuple_type in tuple_types {
+                    check_general_type_compact(
+                        context,
+                        &member.typ,
+                        tuple_type,
+                        check_guard.next_level()?,
+                    )?;
+                }
+            }
+            _ => {
                 return Err(TypeCheckFailReason::TypeNotMatch);
             }
-
-            let Some(tuple_type) = tuple_types.get(*index as usize - 1) else {
-                return Err(TypeCheckFailReason::TypeNotMatch);
-            };
-
-            check_general_type_compact(
-                context,
-                &member.typ,
-                tuple_type,
-                check_guard.next_level()?,
-            )?;
-        } else {
-            return Err(TypeCheckFailReason::TypeNotMatch);
         }
 
         context.mark_key_checked(key);

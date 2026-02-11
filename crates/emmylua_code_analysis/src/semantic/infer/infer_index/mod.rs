@@ -27,6 +27,7 @@ use crate::{
             narrow::infer_expr_narrow_type,
         },
         member::get_buildin_type_map_type_id,
+        member::intersect_member_types,
         type_check::{self, check_type_compact},
     },
 };
@@ -633,16 +634,26 @@ fn infer_intersection_member(
     index_expr: LuaIndexMemberExpr,
     infer_guard: &InferGuardRef,
 ) -> InferResult {
+    let mut result: Option<LuaType> = None;
     for member in intersection_type.get_types() {
         match infer_member_by_member_key(db, cache, member, index_expr.clone(), &infer_guard.fork())
         {
-            Ok(ty) => return Ok(ty),
+            Ok(ty) => {
+                result = Some(match result {
+                    Some(prev) => intersect_member_types(db, prev, ty),
+                    None => ty,
+                });
+
+                if matches!(result, Some(LuaType::Never)) {
+                    break;
+                }
+            }
             Err(InferFailReason::FieldNotFound) => continue,
             Err(reason) => return Err(reason),
         }
     }
 
-    Err(InferFailReason::FieldNotFound)
+    result.ok_or(InferFailReason::FieldNotFound)
 }
 
 fn infer_generic_members_from_super_generics(
@@ -691,6 +702,20 @@ fn infer_generic_member(
     let substitutor = TypeSubstitutor::from_type_array(generic_params.clone());
 
     if let LuaType::Ref(base_type_decl_id) = &base_type {
+        let type_index = db.get_type_index();
+        if let Some(type_decl) = type_index.get_type_decl(base_type_decl_id)
+            && type_decl.is_alias()
+            && let Some(origin_type) = type_decl.get_alias_origin(db, Some(&substitutor))
+        {
+            return infer_member_by_member_key(
+                db,
+                cache,
+                &origin_type,
+                index_expr,
+                &infer_guard.fork(),
+            );
+        }
+
         let result = infer_generic_members_from_super_generics(
             db,
             cache,
@@ -1008,15 +1033,25 @@ fn infer_member_by_index_intersection(
     index_expr: LuaIndexMemberExpr,
     infer_guard: &InferGuardRef,
 ) -> InferResult {
+    let mut result: Option<LuaType> = None;
     for member in intersection.get_types() {
         match infer_member_by_operator(db, cache, member, index_expr.clone(), &infer_guard.fork()) {
-            Ok(ty) => return Ok(ty),
+            Ok(ty) => {
+                result = Some(match result {
+                    Some(prev) => intersect_member_types(db, prev, ty),
+                    None => ty,
+                });
+
+                if matches!(result, Some(LuaType::Never)) {
+                    break;
+                }
+            }
             Err(InferFailReason::FieldNotFound) => continue,
             Err(reason) => return Err(reason),
         }
     }
 
-    Err(InferFailReason::FieldNotFound)
+    result.ok_or(InferFailReason::FieldNotFound)
 }
 
 fn infer_member_by_index_generic(
@@ -1147,7 +1182,7 @@ fn infer_namespace_member(
     };
 
     let namespace_or_type_id = format!("{}.{}", ns, member_key);
-    let type_id = LuaTypeDeclId::new(&namespace_or_type_id);
+    let type_id = LuaTypeDeclId::global(&namespace_or_type_id);
     if db.get_type_index().get_type_decl(&type_id).is_some() {
         return Ok(LuaType::Def(type_id));
     }

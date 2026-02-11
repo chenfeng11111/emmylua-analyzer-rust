@@ -1072,6 +1072,7 @@ pub enum LuaAliasCallKind {
     Select,
     Unpack,
     RawGet,
+    Merge,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -1278,27 +1279,6 @@ impl VariadicType {
                 }
                 Some(total_len)
             }
-        }
-    }
-}
-
-impl From<SmolStr> for LuaType {
-    fn from(s: SmolStr) -> Self {
-        let str: &str = s.as_ref();
-        match str {
-            "nil" => LuaType::Nil,
-            "table" => LuaType::Table,
-            "userdata" => LuaType::Userdata,
-            "function" => LuaType::Function,
-            "thread" => LuaType::Thread,
-            "boolean" => LuaType::Boolean,
-            "string" => LuaType::String,
-            "integer" => LuaType::Integer,
-            "number" => LuaType::Number,
-            "io" => LuaType::Io,
-            "global" => LuaType::Global,
-            "self" => LuaType::SelfInfer,
-            _ => LuaType::Ref(LuaTypeDeclId::new_by_id(s.into())),
         }
     }
 }
