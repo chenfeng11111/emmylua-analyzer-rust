@@ -492,7 +492,15 @@ fn check_exact_field(semantic_model: &SemanticModel, index_expr: &LuaIndexExpr) 
         crate::SemanticDeclLevel::NoTrace,
     )?;
 
+    // 防止 owner 链条出现环导致死循环（A->B->A 或更复杂）
+    let mut visited = HashSet::new();
+
     loop {
+        // 如果已经访问过该节点，说明出现环，直接终止
+        if !visited.insert(current_semantic_decl_id.clone()) {
+            return Some(false);
+        }
+
         // 1. 检查当前 decl 是否有 exact_field
         if let Some(common_property) = db.get_property_index().get_property(&current_semantic_decl_id) {
             if common_property.find_attribute_use("exact_field").is_some() {
