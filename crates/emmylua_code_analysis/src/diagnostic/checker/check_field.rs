@@ -509,18 +509,15 @@ fn check_exact_field(semantic_model: &SemanticModel, index_expr: &LuaIndexExpr) 
         }
 
         // 2. 如果没有，尝试获取 origin owner
-        match current_semantic_decl_id {
-            crate::LuaSemanticDeclId::LuaDecl(decl_id) => {
-                // 如果能找到 origin owner，更新 current_semantic_decl_id 并继续循环
-                if let Some(owner_decl_id) = find_decl_origin_owners(semantic_model, decl_id) {
-                    // 只有当 origin owner 和当前不同的时候才继续，防止死循环 (取决于 find_decl_origin_owners 的实现，加个判断更安全)
-                    if owner_decl_id != current_semantic_decl_id {
-                        current_semantic_decl_id = owner_decl_id;
-                        continue;
-                    }
+        if let crate::LuaSemanticDeclId::LuaDecl(decl_id) = current_semantic_decl_id {
+            // 如果能找到 origin owner，更新 current_semantic_decl_id 并继续循环
+            if let Some(owner_decl_id) = find_decl_origin_owners(semantic_model, decl_id) {
+                // 只有当 origin owner 和当前不同的时候才继续，防止死循环 (取决于 find_decl_origin_owners 的实现，加个判断更安全)
+                if owner_decl_id != current_semantic_decl_id {
+                    current_semantic_decl_id = owner_decl_id;
+                    continue;
                 }
             }
-            _ => {}
         }
 
         // 3. 如果没有找到 exact_field 且没有上级 owner，则返回 false (Some(false) 表示找到了结果但结果为否)

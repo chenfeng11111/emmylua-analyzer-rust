@@ -52,17 +52,19 @@ fn check_param_type(
             if is_disable.is_some() {
                 continue;
             }
-            let param = lua_params_map.get(signature_param_name).unwrap();
-            context.add_diagnostic(
-                DiagnosticCode::UnknownFunctionParam,
-                param.get_range(),
-                t!(
-                    "unknown function param type %{name}",
-                    name = signature_param_name
-                )
-                .to_string(),
-                None,
-            );
+            let param = lua_params_map.get(signature_param_name);
+            if let Some(param) = param {
+                context.add_diagnostic(
+                    DiagnosticCode::UnknownFunctionParam,
+                    param.get_range(),
+                    t!(
+                        "unknown function param type %{name}",
+                        name = signature_param_name
+                    )
+                    .to_string(),
+                    None,
+                );
+            }
         }
     }
     Some(())
