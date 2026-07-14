@@ -6,13 +6,15 @@ mod var_ref_id;
 
 use crate::{
     CacheEntry, DbIndex, FlowAntecedent, FlowId, FlowNode, FlowTree, InferFailReason,
-    LuaInferCache, LuaType, infer_param,
+    LuaInferCache, infer_param,
     semantic::infer::{
         InferResult,
         infer_name::{find_decl_member_type, infer_global_type},
     },
 };
+pub(in crate::semantic) use condition_flow::{ConditionFlowAction, InferConditionFlow};
 use emmylua_parser::{LuaAstNode, LuaChunk, LuaExpr};
+pub(in crate::semantic) use get_type_at_cast_flow::apply_assignment_target_casts;
 pub use get_type_at_cast_flow::get_type_at_call_expr_inline_cast;
 pub use narrow_type::{narrow_down_type, narrow_false_or_nil, remove_false_or_nil};
 pub use var_ref_id::{VarRefId, get_var_expr_var_ref_id};
@@ -36,7 +38,11 @@ pub fn infer_expr_narrow_type(
     get_type_at_flow::get_type_at_flow(db, flow_tree, cache, &root, &var_ref_id, flow_id)
 }
 
-fn get_var_ref_type(db: &DbIndex, cache: &mut LuaInferCache, var_ref_id: &VarRefId) -> InferResult {
+pub(in crate::semantic) fn get_var_ref_type(
+    db: &DbIndex,
+    cache: &mut LuaInferCache,
+    var_ref_id: &VarRefId,
+) -> InferResult {
     if let Some(decl_id) = var_ref_id.get_decl_id_ref() {
         let decl = db
             .get_decl_index()
@@ -71,22 +77,11 @@ fn get_var_ref_type(db: &DbIndex, cache: &mut LuaInferCache, var_ref_id: &VarRef
     }
 }
 
-fn get_single_antecedent(tree: &FlowTree, flow: &FlowNode) -> Result<FlowId, InferFailReason> {
+fn get_single_antecedent(flow: &FlowNode) -> Result<FlowId, InferFailReason> {
     match &flow.antecedent {
         Some(antecedent) => match antecedent {
             FlowAntecedent::Single(id) => Ok(*id),
-            FlowAntecedent::Multiple(multi_id) => {
-                let multi_flow = tree
-                    .get_multi_antecedents(*multi_id)
-                    .ok_or(InferFailReason::None)?;
-                if !multi_flow.is_empty() {
-                    // If there are multiple antecedents, we need to handle them separately
-                    // For now, we just return the first one
-                    Ok(multi_flow[0])
-                } else {
-                    Err(InferFailReason::None)
-                }
-            }
+            FlowAntecedent::Multiple(_) => Err(InferFailReason::None),
         },
         None => Err(InferFailReason::None),
     }
@@ -107,8 +102,31 @@ fn get_multi_antecedents(tree: &FlowTree, flow: &FlowNode) -> Result<Vec<FlowId>
     }
 }
 
-#[derive(Debug)]
-pub enum ResultTypeOrContinue {
-    Result(LuaType),
-    Continue,
+#[cfg(test)]
+mod tests {
+    use crate::{CacheEntry, LuaType, VirtualWorkspace};
+    use emmylua_parser::{LuaAstNode, LuaTableExpr};
+
+    use super::*;
+
+    #[test]
+    fn test_replay_overlay_is_scoped_without_cache_seed() {
+        let mut ws = VirtualWorkspace::new();
+        let file_id = ws.def("local value = {}");
+        let syntax_id = ws.get_node::<LuaTableExpr>(file_id).get_syntax_id();
+        let mut cache = LuaInferCache::new(file_id, Default::default());
+
+        cache.with_replay_overlay(&[(syntax_id, LuaType::Table)], &[syntax_id], |cache| {
+            assert_eq!(cache.replay_expr_type(syntax_id), Some(&LuaType::Table));
+            assert!(cache.no_flow_table_exprs.contains(&syntax_id));
+            assert!(!cache.expr_no_flow_cache.contains_key(&syntax_id));
+            cache
+                .expr_no_flow_cache
+                .insert(syntax_id, CacheEntry::Cache(Some(LuaType::Table)));
+        });
+
+        assert!(cache.replay_expr_type(syntax_id).is_none());
+        assert!(!cache.no_flow_table_exprs.contains(&syntax_id));
+        assert!(!cache.expr_no_flow_cache.contains_key(&syntax_id));
+    }
 }

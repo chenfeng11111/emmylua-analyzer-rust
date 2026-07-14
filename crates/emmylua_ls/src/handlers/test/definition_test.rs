@@ -104,6 +104,24 @@ mod tests {
     }
 
     #[gtest]
+    fn test_goto_label_definition() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        check!(ws.check_definition(
+            r#"
+                while true do
+                    goto co<??>nt
+                    ::cont::
+                end
+            "#,
+            vec![Expected {
+                file: "".to_string(),
+                line: 3
+            }]
+        ));
+        Ok(())
+    }
+
+    #[gtest]
     fn test_goto_overload() -> Result<()> {
         let mut ws = ProviderVirtualWorkspace::new();
         ws.def_file(
@@ -209,7 +227,6 @@ mod tests {
         ws.def_file(
             "test.lua",
             r#"
-                ---@export
                 ---@class Export
                 local export = {}
                 ---@generic T
@@ -230,7 +247,7 @@ mod tests {
             "#,
             vec![Expected {
                 file: "test.lua".to_string(),
-                line: 8
+                line: 7
             }]
         ));
         Ok(())

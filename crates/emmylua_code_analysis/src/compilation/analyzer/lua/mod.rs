@@ -1,19 +1,19 @@
 mod call;
 mod closure;
 mod for_range_stat;
-mod func_body;
+pub(in crate::compilation::analyzer) mod func_body;
 mod metatable;
 mod module;
 mod stats;
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use closure::analyze_closure;
 pub use closure::analyze_return_point;
 use emmylua_parser::{LuaAst, LuaAstNode, LuaExpr};
 use for_range_stat::analyze_for_range_stat;
 pub use for_range_stat::infer_for_range_iter_expr_func;
-pub use func_body::LuaReturnPoint;
+pub use func_body::{LuaReturnPoint, analyze_func_body_returns_with};
 use metatable::analyze_setmetatable;
 use module::analyze_chunk_return;
 use stats::{
@@ -26,7 +26,7 @@ use crate::{
     compilation::analyzer::{AnalysisPipeline, lua::call::analyze_call},
     db_index::{DbIndex, LuaType},
     profile::Profile,
-    semantic::infer_expr,
+    semantic::{infer_expr, try_infer_expr_no_flow},
 };
 
 use super::AnalyzeContext;
@@ -120,5 +120,10 @@ impl LuaAnalyzer<'_> {
     pub fn infer_expr(&mut self, expr: &LuaExpr) -> Result<LuaType, InferFailReason> {
         let cache = self.context.infer_manager.get_infer_cache(self.file_id);
         infer_expr(self.db, cache, expr.clone())
+    }
+
+    fn infer_expr_no_flow(&mut self, expr: &LuaExpr) -> Result<Option<LuaType>, InferFailReason> {
+        let cache = self.context.infer_manager.get_infer_cache(self.file_id);
+        try_infer_expr_no_flow(self.db, cache, expr.clone())
     }
 }

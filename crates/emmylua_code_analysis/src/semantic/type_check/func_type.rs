@@ -1,5 +1,4 @@
 use crate::{
-    TypeSubstitutor,
     db_index::{LuaFunctionType, LuaOperatorMetaMethod, LuaSignatureId, LuaType, LuaTypeDeclId},
     semantic::type_check::type_check_context::TypeCheckContext,
 };
@@ -15,27 +14,6 @@ pub fn check_doc_func_type_compact(
     compact_type: &LuaType,
     check_guard: TypeCheckGuard,
 ) -> TypeCheckResult {
-    // TODO: 缓存以提高性能
-    // 如果是泛型+不包含模板参数+alias, 那么尝试实例化再检查
-    if let LuaType::Generic(generic) = compact_type {
-        if !generic.contain_tpl() {
-            let base_id = generic.get_base_type_id();
-            if let Some(decl) = context.db.get_type_index().get_type_decl(&base_id)
-                && decl.is_alias()
-            {
-                let substitutor =
-                    TypeSubstitutor::from_alias(generic.get_params().clone(), base_id.clone());
-                if let Some(alias_origin) = decl.get_alias_origin(context.db, Some(&substitutor)) {
-                    return check_general_type_compact(
-                        context,
-                        &LuaType::DocFunction(source_func.clone().into()),
-                        &alias_origin,
-                        check_guard.next_level()?,
-                    );
-                }
-            }
-        }
-    }
     match compact_type {
         LuaType::DocFunction(compact_func) => {
             check_doc_func_type_compact_for_params(context, source_func, compact_func, check_guard)
@@ -111,10 +89,11 @@ fn check_doc_func_type_compact_for_params(
         let compact_param_type = &compact_param.1;
 
         if let (Some(source_type), Some(compact_type)) = (source_param_type, compact_param_type) {
+            // 函数赋值时, 被赋值函数必须接受目标类型可能传入的所有参数.
             match check_general_type_compact(
                 context,
-                source_type,
                 compact_type,
+                source_type,
                 check_guard.next_level()?,
             ) {
                 Ok(()) => {}
@@ -149,8 +128,8 @@ fn check_doc_func_type_compact_for_varargs(
             if let Some(compact_param_type) = compact_param_type {
                 check_general_type_compact(
                     context,
-                    varargs_type,
                     compact_param_type,
+                    varargs_type,
                     check_guard.next_level()?,
                 )?;
             }

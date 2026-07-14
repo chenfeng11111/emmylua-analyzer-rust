@@ -2,11 +2,21 @@
 mod tests {
     use crate::{DiagnosticCode, VirtualWorkspace};
 
+    fn assert_missing_return_ok(code: &str) {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(DiagnosticCode::MissingReturn, code));
+    }
+
+    fn assert_missing_return_error(code: &str) {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(DiagnosticCode::MissingReturn, code));
+    }
+
     #[test]
     fn test_1() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
             ---@class Completion2.A
@@ -26,7 +36,7 @@ mod tests {
     fn test_2() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturnValue,
             r#"
             ---@return integer a
@@ -43,7 +53,7 @@ mod tests {
     fn test_missing_return_value() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturnValue,
             r#"
             ---@return number
@@ -53,7 +63,7 @@ mod tests {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturnValue,
             r#"
             ---@return number
@@ -69,7 +79,7 @@ mod tests {
     fn test_missing_return_value_variadic() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturnValue,
             r#"
             --- @return integer?
@@ -85,7 +95,7 @@ mod tests {
     fn test_return_expr_list_missing() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturnValue,
             r#"
             ---@return integer, integer
@@ -98,7 +108,7 @@ mod tests {
             end
         "#
         ));
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturnValue,
             r#"
             ---@return integer
@@ -117,7 +127,7 @@ mod tests {
     fn test_dots() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
             ---@return number, any...
@@ -132,7 +142,7 @@ mod tests {
     fn test_redundant_return_value() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
             ---@return number
@@ -144,10 +154,26 @@ mod tests {
     }
 
     #[test]
+    fn test_assert_optional_return_is_not_redundant() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::RedundantReturnValue,
+            r#"
+            --- @return string
+            function foo()
+                local res --- @type string?
+                return assert(res)
+            end
+        "#
+        ));
+    }
+
+    #[test]
     fn test_not_return_anno() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturnValue,
             r#"
             local function baz()
@@ -159,7 +185,7 @@ mod tests {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
             function bar(a)
@@ -173,7 +199,7 @@ mod tests {
     fn test_return_expr_list_redundant() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
             ---@return integer, integer
@@ -187,7 +213,7 @@ mod tests {
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
             ---@return integer, integer, integer
@@ -206,7 +232,7 @@ mod tests {
     fn test_missing_return() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A
@@ -221,7 +247,66 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingReturn,
+            r#"
+            ---@return number
+            local function foo()
+                while true do
+                    return 1
+                end
+            end
+            "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingReturn,
+            r#"
+            local A
+            ---@return number
+            local function foo()
+                if A then
+                    A = false
+                end
+
+                while true do
+                    return 1
+                end
+            end
+            "#
+        ));
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingReturn,
+            r#"
+            local A
+            ---@return number
+            local function foo()
+                while true do
+                    if A then
+                        break
+                    end
+
+                    return 1
+                end
+            end
+            "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingReturn,
+            r#"
+            ---@return number
+            local function foo(A)
+                while A do
+                end
+
+                return 1
+            end
+            "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A
@@ -236,7 +321,64 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingReturn,
+            r#"
+            local A
+            ---@return number
+            local function foo()
+                while true do
+                    if A then
+                        do
+                            break
+                        end
+                    end
+
+                    while true do
+                        return 1
+                    end
+                end
+            end
+            "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingReturn,
+            r#"
+            local A
+            ---@return number
+            local function foo()
+                while true do
+                    return 1
+
+                    if A then
+                        break
+                    end
+                end
+            end
+            "#
+        ));
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingReturn,
+            r#"
+            local A
+            ---@return number
+            local function foo()
+                while true do
+                    if A then
+                        break
+                    end
+
+                    while true do
+                        return 1
+                    end
+                end
+            end
+            "#
+        ));
+
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A
@@ -253,7 +395,7 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             ---@return number
@@ -262,7 +404,7 @@ mod tests {
             "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
 
@@ -272,7 +414,7 @@ mod tests {
             "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             ---@return any ...
@@ -281,7 +423,7 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             ---@return number
@@ -291,7 +433,7 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A
@@ -304,7 +446,7 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A, B
@@ -319,7 +461,7 @@ mod tests {
             "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A, B
@@ -336,7 +478,7 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A, B
@@ -352,7 +494,7 @@ mod tests {
             "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             ---@return any
@@ -362,7 +504,7 @@ mod tests {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             ---@return any, number
@@ -372,7 +514,7 @@ mod tests {
             "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             ---@return any, any
@@ -382,7 +524,7 @@ mod tests {
             "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local A
@@ -400,9 +542,325 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_return_accepts_truthy_loops() {
+        for code in [
+            r#"
+            ---@return number
+            local function foo()
+                while (true) do
+                    return 1
+                end
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                while 1 == 1 do
+                    return 1
+                end
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                while 1 do
+                    return 1
+                end
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                while {} do
+                    return 1
+                end
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                repeat
+                    return 1
+                until true
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                repeat
+                    return 1
+                until 1 == 1
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                repeat
+                    return 1
+                until "done"
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                repeat
+                    return 1
+                until function() end
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo(a)
+                repeat
+                    if a then
+                        return 1
+                    end
+                until true
+
+                return 2
+            end
+            "#,
+        ] {
+            assert_missing_return_ok(code);
+        }
+    }
+
+    #[test]
+    fn test_missing_return_accepts_truthy_ifs() {
+        for code in [
+            r#"
+            ---@return number
+            local function foo()
+                if 1 == 1 then
+                    return 1
+                end
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                if 1 == 1 then
+                    return 1
+                else
+                    while pred() do
+                    end
+                end
+            end
+            "#,
+            r#"
+            ---@return number
+            local function foo()
+                if {} then
+                    return 1
+                end
+            end
+            "#,
+        ] {
+            assert_missing_return_ok(code);
+        }
+    }
+
+    #[test]
+    fn test_missing_return_keeps_local_if_call_condition_dynamic() {
+        assert_missing_return_error(
+            r#"
+            local should_take_branch = function()
+                return true
+            end
+
+            ---@return number
+            local function foo()
+                if should_take_branch() then
+                    return 1
+                end
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_dynamic_parent_walk_before_return() {
+        // This matches the current `MissingReturn` check: runtime-dependent
+        // loops are allowed when the function still reaches a later `return`.
+        assert_missing_return_ok(
+            r#"
+            ---@class Node
+            local Node = {}
+
+            ---@return Node?
+            function Node:parent()
+                return nil
+            end
+
+            ---@param node Node?
+            ---@return integer
+            local function get_indent(node)
+                local indent = 0
+
+                while node do
+                    node = node:parent()
+                end
+
+                return indent
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_dynamic_repeat_before_return() {
+        assert_missing_return_ok(
+            r#"
+            ---@return number
+            local function foo(done)
+                repeat
+                until done
+
+                return 1
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_truthy_while_with_break_before_return() {
+        assert_missing_return_ok(
+            r#"
+            ---@return number
+            local function foo(done)
+                while true do
+                    if done then
+                        break
+                    end
+                end
+
+                return 1
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_non_terminating_truthy_while() {
+        assert_missing_return_ok(
+            r#"
+            --- @param ready boolean
+            --- @return string
+            function foo(ready)
+                while true do
+                    if ready then
+                        return 'ready'
+                    end
+                end
+
+                error('unreachable')
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_infinite_repeat_with_break_before_return() {
+        assert_missing_return_ok(
+            r#"
+            ---@return number
+            local function foo(done)
+                repeat
+                    if done then
+                        break
+                    end
+                until false
+
+                return 1
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_dynamic_while_with_infinite_body_before_return() {
+        assert_missing_return_ok(
+            r#"
+            ---@return number
+            local function foo(a)
+                while a do
+                    while true do
+                    end
+                end
+
+                return 1
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_dynamic_while_with_break_or_infinite_body_before_return() {
+        assert_missing_return_ok(
+            r#"
+            ---@return number
+            local function foo(a, b)
+                while a do
+                    if b then
+                        break
+                    end
+
+                    while true do
+                    end
+                end
+
+                return 1
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_non_terminating_numeric_for_before_return() {
+        assert_missing_return_ok(
+            r#"
+            ---@return number
+            local function foo()
+                for _ = 1, 10 do
+                    while true do
+                    end
+                end
+
+                return 1
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_missing_return_accepts_non_terminating_generic_for_before_return() {
+        assert_missing_return_ok(
+            r#"
+            local function iter(_, done)
+                if done then
+                    return nil
+                end
+
+                return true, true
+            end
+
+            ---@return number
+            local function foo()
+                for _ in iter, nil, nil do
+                    while true do
+                    end
+                end
+
+                return 1
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn test_issue_236() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for_namespace(
+        assert!(ws.has_no_diagnostic_in_namespace(
             DiagnosticCode::MissingReturn,
             r#"
             --- @param a number
@@ -438,7 +896,7 @@ mod tests {
         "#,
         );
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             local M = {}
@@ -454,7 +912,7 @@ mod tests {
     fn test_miss_return_2() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
             os.exit = function(...)
@@ -467,7 +925,7 @@ mod tests {
     fn test_miss_return_3() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
                 ---@class Point
@@ -501,7 +959,7 @@ mod tests {
     fn test_pcall_missing_return() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
                 pcall(function() end)
@@ -512,7 +970,7 @@ mod tests {
     #[test]
     fn test_missing_return_1() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingReturn,
             r#"
                 ---@generic T
@@ -528,7 +986,7 @@ mod tests {
     #[test]
     fn test_issue_567() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
                 local function fnil()
@@ -541,7 +999,7 @@ mod tests {
         "#,
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
                 --- @return nil

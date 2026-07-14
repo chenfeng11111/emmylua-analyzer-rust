@@ -1,6 +1,11 @@
 #[cfg(test)]
 mod test {
-    use crate::{DiagnosticCode, VirtualWorkspace};
+    use emmylua_parser::LuaClosureExpr;
+
+    use crate::{
+        DiagnosticCode, LuaSignatureId, LuaType, LuaTypeDeclId, VirtualWorkspace,
+        complete_type_generic_args,
+    };
 
     #[test]
     fn test_issue_586() {
@@ -169,8 +174,8 @@ mod test {
             pred = function() end
             "#,
         );
-        assert!(ws.check_code_for(DiagnosticCode::ParamTypeMismatch, r#"pred('hello', 1, {})"#));
-        assert!(!ws.check_code_for(
+        assert!(ws.has_no_diagnostic(DiagnosticCode::ParamTypeMismatch, r#"pred('hello', 1, {})"#));
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"pred('hello',"1", {})"#
         ));
@@ -188,7 +193,7 @@ mod test {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type A01<number>
@@ -210,7 +215,7 @@ mod test {
             end
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type A02<number>
@@ -232,7 +237,7 @@ mod test {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type A02<fun(v0: number, v1: number)>
@@ -254,7 +259,7 @@ mod test {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type A01<number>
@@ -278,7 +283,7 @@ mod test {
             end
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type fun(name: string, age: number)
@@ -287,7 +292,7 @@ mod test {
             "#,
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type fun(name: string, age: number)
@@ -311,7 +316,7 @@ mod test {
             end
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type A01<fun(a: A02, b: string)>
@@ -340,7 +345,7 @@ mod test {
             end
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type fun(): number
@@ -350,7 +355,7 @@ mod test {
             "#,
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type fun(): string
@@ -374,7 +379,7 @@ mod test {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type Pick<{name: string, age: number, email: string}, "name" | "age">
@@ -382,6 +387,176 @@ mod test {
             accept(m)
             "#,
         ));
+    }
+
+    #[test]
+    fn test_type_mapped_pick_single_key() {
+        let mut ws = VirtualWorkspace::new();
+
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one   1
+            ---@field two   2
+            ---@field three 3
+
+            ---@alias Pick<T, K extends keyof T> {[P in K]: T[P];}
+
+            ---@type Pick<A, 'one'>
+            Tmp = nil
+            "#,
+        );
+
+        let tmp_ty = ws.expr_ty("Tmp");
+        assert_eq!(
+            ws.humanize_type_detailed(tmp_ty),
+            "Pick<A,\"one\"> = { one: 1 }"
+        );
+    }
+
+    #[test]
+    fn test_type_mapped_pick_literal_union_keys() {
+        let mut ws = VirtualWorkspace::new();
+
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one   1
+            ---@field two   2
+            ---@field three 3
+
+            ---@alias Pick<T, K extends keyof T> {[P in K]: T[P];}
+            ---@alias Value<T, K extends keyof T> T[K]
+
+            ---@type Pick<A, 'one' | 'two'>
+            Picked = nil
+
+            ---@type Value<A, 'one' | 'two'>
+            Value = nil
+            "#,
+        );
+
+        let picked_ty = ws.expr_ty("Picked");
+        assert_eq!(
+            ws.humanize_type_detailed(picked_ty),
+            "Pick<A,(\"one\"|\"two\")> = { one: 1, two: 2 }"
+        );
+
+        let value_ty = ws.expr_ty("Value");
+        assert_eq!(
+            ws.humanize_type_detailed(value_ty),
+            "Value<A,(\"one\"|\"two\")> = (1|2)"
+        );
+    }
+
+    #[test]
+    fn test_explicit_call_generic_literal_used_as_index_key() {
+        let mut ws = VirtualWorkspace::new();
+
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+            ---@field two 2
+
+            ---@generic T, K extends keyof T
+            ---@return T[K]
+            function get_explicit()
+            end
+
+            Result = get_explicit--[[@<A, "one">]]()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "1");
+    }
+
+    #[test]
+    fn test_alias_generic_constraint_references_later_param() {
+        let mut ws = VirtualWorkspace::new();
+
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@alias B<K extends keyof T, T> T[K]
+
+            ---@type B<"one", A>
+            Result = nil
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type_detailed(result_ty), "B<\"one\",A> = 1");
+    }
+
+    #[test]
+    fn test_later_keyof_constraint_still_reports_invalid_key() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@alias B<K extends keyof T, T> T[K]
+            "#,
+        );
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@type B<"two", A>
+            local value
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_function_generic_constraint_references_later_param() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@generic K extends keyof T, T
+            ---@param object T
+            ---@param key K
+            ---@return T[K]
+            function pick(object, key)
+            end
+
+            ---@type A
+            local a
+            Result = pick(a, "one")
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "1");
+    }
+
+    #[test]
+    fn test_inline_function_generic_constraint_references_later_param() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@type fun<K extends keyof T, T>(object: T, key: K): T[K]
+            local pick
+
+            ---@type A
+            local a
+            Result = pick(a, "one")
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "1");
     }
 
     #[test]
@@ -397,7 +572,7 @@ mod test {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type Partial<{name: string, age: number}>
@@ -423,7 +598,7 @@ mod test {
             function unwrap(...) end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type Wrapper<int>, Wrapper<int>, Wrapper<string>
@@ -435,6 +610,37 @@ mod test {
         assert_eq!(ws.expr_ty("D"), ws.ty("int"));
         assert_eq!(ws.expr_ty("E"), ws.ty("int"));
         assert_eq!(ws.expr_ty("F"), ws.ty("string"));
+    }
+
+    #[test]
+    fn test_mapped_keyof_alias_does_preserve_tuple_result() {
+        let mut ws = VirtualWorkspace::new();
+
+        ws.def(
+            r#"
+            ---@class Wrapper<T>
+
+            ---@alias Keys<T> keyof T
+            ---@alias UnwrapUnion<T> { [K in Keys<T>]: T[K] extends Wrapper<infer U> and U or unknown; }
+
+            ---@generic T
+            ---@param ... T...
+            ---@return UnwrapUnion<T>...
+            function unwrap(...) end
+            "#,
+        );
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ParamTypeMismatch,
+            r#"
+            ---@type Wrapper<int>, Wrapper<int>, Wrapper<string>
+            local a, b, c
+
+            D, E, F = unwrap(a, b, c)
+            "#,
+        ));
+        assert_ne!(ws.expr_ty("D"), ws.ty("int"));
+        assert_ne!(ws.expr_ty("E"), ws.ty("int"));
+        assert_ne!(ws.expr_ty("F"), ws.ty("string"));
     }
 
     #[test]
@@ -451,7 +657,7 @@ mod test {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@class A
@@ -463,7 +669,7 @@ mod test {
 
             "#,
         ));
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             f("A", "b", "1")
@@ -483,7 +689,7 @@ mod test {
             function f1(...) end
             "#,
             );
-            assert!(ws.check_code_for(
+            assert!(ws.has_no_diagnostic(
                 DiagnosticCode::ParamTypeMismatch,
                 r#"
               A, B, C =  f1(1, "2", true)
@@ -502,7 +708,7 @@ mod test {
                 function f2(...) end
             "#,
             );
-            assert!(ws.check_code_for(
+            assert!(ws.has_no_diagnostic(
                 DiagnosticCode::ParamTypeMismatch,
                 r#"
               D, E, F =  f2(1, "2", true)
@@ -522,7 +728,7 @@ mod test {
             function f3(...) end
             "#,
             );
-            assert!(!ws.check_code_for(
+            assert!(!ws.has_no_diagnostic(
                 DiagnosticCode::ParamTypeMismatch,
                 r#"
               G, H =  f3(1, "2")
@@ -541,7 +747,7 @@ mod test {
             function f4(...) end
             "#,
             );
-            assert!(!ws.check_code_for(
+            assert!(!ws.has_no_diagnostic(
                 DiagnosticCode::ParamTypeMismatch,
                 r#"
               I, J, K =  f4(1, "2")
@@ -571,7 +777,7 @@ mod test {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type IsTypeGuard<"number">
@@ -613,15 +819,15 @@ mod test {
             function f(v)
             end
 
-            ---@generic TP: std.type
+            ---@generic const TP: std.type
             ---@param obj any
-            ---@param tp std.ConstTpl<TP>
+            ---@param tp TP
             ---@return TypeGuard<IsTypeGuard<TP>>
             function is_type(obj, tp)
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             local a
@@ -651,7 +857,7 @@ mod test {
             function return_params(f) end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             result = return_params(pow)
@@ -665,7 +871,7 @@ mod test {
     fn test_overload() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@class Expect
@@ -680,7 +886,150 @@ mod test {
     }
 
     #[test]
-    fn test_generic_default_constraint_used() {
+    fn test_call_overload_self_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Callable
+            ---@overload fun<T>(self: self, value: T): T
+            ---@type Callable
+            local c
+
+            result = c(c, 1)
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("result");
+        assert_eq!(ws.humanize_type(result_ty), "integer");
+    }
+
+    #[test]
+    fn test_call_operator_self_infer_on_index() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Factory
+            ---@overload fun(): self
+
+            ---@class Mod
+            ---@field Factory Factory
+            ---@type Mod
+            local Mod
+
+            result = Mod.Factory()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("result");
+        assert_eq!(ws.humanize_type(result_ty), "Factory");
+    }
+
+    #[test]
+    fn test_call_operator_self_infer_filters_union_receiver() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Callable
+            ---@overload fun(): self
+
+            ---@type Callable|string
+            local value
+
+            result = value()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("result");
+        assert_eq!(ws.humanize_type(result_ty), "Callable");
+    }
+
+    #[test]
+    fn test_call_operator_self_infer_through_generic_alias() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Callable
+            ---@overload fun(): self
+
+            ---@alias Box<T> T
+
+            ---@type Box<Callable>
+            local value
+
+            result = value()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("result");
+        assert_eq!(ws.humanize_type(result_ty), "Callable");
+    }
+
+    #[test]
+    fn test_call_operator_self_infer_through_intersection() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Callable
+            ---@overload fun(): self
+
+            ---@class Extra
+
+            ---@type Callable & Extra
+            local value
+
+            result = value()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("result");
+        assert_eq!(ws.humanize_type(result_ty), "(Callable & Extra)");
+    }
+
+    #[test]
+    fn test_colon_call_generic_uses_receiver_when_member_is_callable() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Owner
+            ---@field run CallableMethod
+
+            ---@class CallableMethod
+            ---@overload fun<T>(owner: T): T
+
+            ---@type Owner
+            local owner
+
+            result = owner:run()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("result");
+        assert_eq!(ws.humanize_type(result_ty), "Owner");
+    }
+
+    #[test]
+    fn test_plain_table_metatable_call_return_self() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+        ws.def(
+            r#"
+            factory = setmetatable({}, {
+                ---@return self
+                __call = function(self)
+                    return self
+                end,
+            })
+
+            result = factory()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("result");
+        let humanized = ws.humanize_type(result_ty);
+        assert_eq!(humanized, "table");
+    }
+
+    #[test]
+    fn test_function_generic_constraint_is_fallback() {
         let mut ws = VirtualWorkspace::new();
         {
             ws.def(
@@ -695,29 +1044,673 @@ mod test {
             );
 
             let result_ty = ws.expr_ty("result");
-            assert_eq!(result_ty, ws.ty("number"));
+            assert_eq!(ws.humanize_type(result_ty), "number");
         }
-        // 类的默认泛型约束暂时不支持
-        // {
-        //     ws.def(
-        //         r#"
-        //     ---@class A<T: number>
-        //     local A = {}
+    }
 
-        //     ---@return T
-        //     function A:use()
-        //     end
+    #[test]
+    fn test_type_annotation_generic_constraint_is_not_default() {
+        let mut ws = VirtualWorkspace::new();
+        // 根据 ts 的行为, any调用函数的结果必然是any
+        ws.def(
+            r#"
+            ---@class Box<T: number>
+            local Box = {}
 
-        //     ---@type A<number>
-        //     local a
+            ---@return T
+            function Box:get()
+            end
 
-        //     resultA = a:use()
-        //     "#,
-        //     );
+            ---@type Box
+            local box
 
-        //     let result_ty = ws.expr_ty("resultA");
-        //     assert_eq!(result_ty, ws.ty("number"));
-        // }
+            Result = box:get()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert!(result_ty.is_any(), "{result_ty:?}");
+    }
+
+    #[test]
+    fn test_method_generic_constraint_references_class_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@class Box<T>
+            local Box = {}
+
+            ---@generic K extends keyof T
+            ---@param key K
+            ---@return T[K]
+            function Box:get(key)
+            end
+
+            ---@type Box<A>
+            local box
+
+            Result = box:get("one")
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "1");
+    }
+
+    #[test]
+    fn test_method_generic_default_references_class_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Box<T>
+            local Box = {}
+
+            ---@generic U = T
+            ---@return U
+            function Box:getDefault()
+            end
+
+            ---@type Box<string>
+            local box
+
+            Result = box:getDefault()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "string");
+    }
+
+    #[test]
+    fn test_generic_default_metadata_storage() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Box<T = string>
+
+            ---@alias Optional<T = number> T | nil
+            "#,
+        );
+
+        let db = ws.analysis.compilation.get_db();
+        let box_params = db
+            .get_type_index()
+            .get_generic_params(&LuaTypeDeclId::global("Box"))
+            .expect("Box generic params");
+        assert_eq!(box_params.len(), 1);
+        assert_eq!(box_params[0].name.as_str(), "T");
+        let box_default = box_params[0].default.clone().expect("Box default type");
+        assert_eq!(ws.humanize_type(box_default), "string");
+
+        let optional_params = ws
+            .analysis
+            .compilation
+            .get_db()
+            .get_type_index()
+            .get_generic_params(&LuaTypeDeclId::global("Optional"))
+            .expect("Optional generic params");
+        assert_eq!(optional_params.len(), 1);
+        assert_eq!(optional_params[0].name.as_str(), "T");
+        let optional_default = optional_params[0]
+            .default
+            .clone()
+            .expect("Optional default type");
+        assert_eq!(ws.humanize_type(optional_default), "number");
+    }
+
+    #[test]
+    fn test_function_generic_default_metadata_storage() {
+        let mut ws = VirtualWorkspace::new();
+        let file_id = ws.def(
+            r#"
+            ---@generic T = string
+            ---@return T
+            local function id()
+            end
+            "#,
+        );
+
+        let closure = ws.get_node::<LuaClosureExpr>(file_id);
+        let signature_id = LuaSignatureId::from_closure(file_id, &closure);
+        let signature = ws
+            .analysis
+            .compilation
+            .get_db()
+            .get_signature_index()
+            .get(&signature_id)
+            .expect("signature");
+        assert_eq!(signature.generic_params.len(), 1);
+        assert_eq!(signature.generic_params[0].name, "T");
+        let default_type = signature.generic_params[0]
+            .default
+            .clone()
+            .expect("signature default type");
+        assert_eq!(ws.humanize_type(default_type), "string");
+    }
+
+    #[test]
+    fn test_generic_const_metadata_storage() {
+        let mut ws = VirtualWorkspace::new();
+        let file_id = ws.def(
+            r#"
+            ---@class Box<const T, U>
+
+            ---@generic const R, S
+            ---@return R
+            local function id()
+            end
+
+            ---@alias Mapper fun<const A, B>(value: A): B
+            "#,
+        );
+
+        let db = ws.analysis.compilation.get_db();
+        let box_params = db
+            .get_type_index()
+            .get_generic_params(&LuaTypeDeclId::global("Box"))
+            .expect("Box generic params");
+        assert_eq!(box_params.len(), 2);
+        assert_eq!(box_params[0].name.as_str(), "T");
+        assert!(box_params[0].is_const);
+        assert_eq!(box_params[1].name.as_str(), "U");
+        assert!(!box_params[1].is_const);
+
+        let closure = ws.get_node::<LuaClosureExpr>(file_id);
+        let signature_id = LuaSignatureId::from_closure(file_id, &closure);
+        let signature = db
+            .get_signature_index()
+            .get(&signature_id)
+            .expect("signature");
+        assert_eq!(signature.generic_params.len(), 2);
+        assert_eq!(signature.generic_params[0].name.as_str(), "R");
+        assert!(signature.generic_params[0].is_const);
+        assert_eq!(signature.generic_params[1].name.as_str(), "S");
+        assert!(!signature.generic_params[1].is_const);
+
+        let function_generic_params = signature.get_function_generic_params();
+        assert!(function_generic_params[0].is_const());
+        assert!(!function_generic_params[1].is_const());
+
+        let mapper_decl = db
+            .get_type_index()
+            .get_type_decl(&LuaTypeDeclId::global("Mapper"))
+            .expect("Mapper alias");
+        let mapper_origin = mapper_decl.get_alias_ref().expect("Mapper alias origin");
+        let LuaType::DocFunction(mapper_func) = mapper_origin else {
+            panic!("expected Mapper alias to be a function type");
+        };
+        let mapper_generic_params = mapper_func.get_generic_params();
+        assert_eq!(mapper_generic_params.len(), 2);
+        assert_eq!(mapper_generic_params[0].get_name(), "A");
+        assert!(mapper_generic_params[0].is_const());
+        assert_eq!(mapper_generic_params[1].get_name(), "B");
+        assert!(!mapper_generic_params[1].is_const());
+    }
+
+    #[test]
+    fn test_bare_generic_type_uses_default() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Box<T = string>
+
+            ---@type Box
+            BoxDefault = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("BoxDefault");
+        assert_eq!(ws.humanize_type(value_ty), "Box<string>");
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingTypeArgument,
+            r#"
+            ---@type Box
+            local value
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_bare_generic_type_uses_default_with_extends() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Base<T extends number = string>
+            ---@type Base
+            Base_A = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("Base_A");
+        assert_eq!(ws.humanize_type(value_ty), "Base<string>");
+    }
+
+    #[test]
+    fn test_partial_generic_type_fills_trailing_default() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Pair<T, U = string>
+
+            ---@type Pair<number>
+            PairValue = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("PairValue");
+        assert_eq!(ws.humanize_type(value_ty), "Pair<number,string>");
+    }
+
+    #[test]
+    fn test_missing_non_defaulted_generic_param_still_reports() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Pair<T, U = string>
+            "#,
+        );
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingTypeArgument,
+            r#"
+            ---@type Pair
+            local value
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_missing_required_generic_param_does_not_complete_defaults() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Pair<T, U = string>
+            "#,
+        );
+
+        let completion = complete_type_generic_args(
+            ws.analysis.compilation.get_db(),
+            &LuaTypeDeclId::global("Pair"),
+            Vec::new(),
+        );
+        assert_eq!(completion.missing_required_count, 1);
+        assert_eq!(completion.completed_args, None);
+
+        ws.def(
+            r#"
+            ---@type Pair
+            PairValue = {}
+            "#,
+        );
+        assert!(matches!(ws.expr_ty("PairValue"), LuaType::Any));
+    }
+
+    #[test]
+    fn test_generic_default_can_reference_earlier_param() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Pair<T = string, U = T[]>
+
+            ---@type Pair<number>
+            PairValue = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("PairValue");
+        assert_eq!(ws.humanize_type(value_ty), "Pair<number,number[]>");
+    }
+
+    #[test]
+    fn test_generic_default_can_reference_later_param_default() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Pair<K = T, T = string>
+
+            ---@type Pair
+            PairValue = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("PairValue");
+        assert_eq!(ws.humanize_type(value_ty), "Pair<string,string>");
+    }
+
+    #[test]
+    fn test_generic_default_can_resolve_long_local_dependency_chain() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Chain<A = B[], B = C, C = integer>
+
+            ---@type Chain
+            ChainValue = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("ChainValue");
+        assert_eq!(
+            ws.humanize_type(value_ty),
+            "Chain<integer[],integer,integer>"
+        );
+    }
+
+    #[test]
+    fn test_generic_default_direct_cycle_materializes_unknown() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Box<T = T>
+            "#,
+        );
+
+        let completion = complete_type_generic_args(
+            ws.analysis.compilation.get_db(),
+            &LuaTypeDeclId::global("Box"),
+            Vec::new(),
+        );
+        assert_eq!(completion.completed_args, Some(vec![LuaType::Unknown]));
+    }
+
+    #[test]
+    fn test_generic_default_indirect_cycle_materializes_unknown() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Box<T = U, U = T>
+            "#,
+        );
+
+        let completion = complete_type_generic_args(
+            ws.analysis.compilation.get_db(),
+            &LuaTypeDeclId::global("Box"),
+            Vec::new(),
+        );
+        assert_eq!(
+            completion.completed_args,
+            Some(vec![LuaType::Unknown, LuaType::Unknown])
+        );
+    }
+
+    #[test]
+    fn test_generic_default_can_reference_defaulted_generic_type() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class A<T = string>
+
+            ---@class B<U = A>
+
+            ---@type B
+            BValue = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("BValue");
+        assert_eq!(ws.humanize_type(value_ty), "B<A<string>>");
+
+        let b_params = ws
+            .analysis
+            .compilation
+            .get_db()
+            .get_type_index()
+            .get_generic_params(&LuaTypeDeclId::global("B"))
+            .expect("B generic params");
+        let default_type = b_params[0].default.clone().expect("B default type");
+        assert_eq!(ws.humanize_type(default_type), "A<string>");
+    }
+
+    #[test]
+    fn test_generic_default_can_reference_later_defaulted_generic_type() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class B<U = A>
+
+            ---@class A<T = string>
+
+            ---@type B
+            BValue = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("BValue");
+        assert_eq!(ws.humanize_type(value_ty), "B<A<string>>");
+
+        let b_params = ws
+            .analysis
+            .compilation
+            .get_db()
+            .get_type_index()
+            .get_generic_params(&LuaTypeDeclId::global("B"))
+            .expect("B generic params");
+        let default_type = b_params[0].default.clone().expect("B default type");
+        assert_eq!(ws.humanize_type(default_type), "A<string>");
+    }
+
+    #[test]
+    fn test_generic_default_cycle_does_not_expand_forever() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class A<T = B>
+
+            ---@class B<U = A>
+
+            ---@type A
+            AValue = {}
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("AValue");
+        assert_eq!(ws.humanize_type(value_ty), "A<B>");
+    }
+
+    #[test]
+    fn test_alias_body_reuses_pre_resolved_generic_metadata() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias Optional<T = string> T | nil
+
+            ---@type Optional
+            OptionalValue = nil
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("OptionalValue");
+        assert_eq!(
+            ws.humanize_type_detailed(value_ty),
+            "Optional<string> = string?"
+        );
+    }
+
+    #[test]
+    fn test_class_super_reuses_pre_resolved_generic_metadata() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Parent<T>
+            ---@field value T
+
+            ---@class Box<T = string>: Parent<T>
+
+            ---@type Box
+            local box
+            BoxValue = box.value
+            "#,
+        );
+
+        let value_ty = ws.expr_ty("BoxValue");
+        assert_eq!(ws.humanize_type(value_ty), "string");
+    }
+
+    #[test]
+    fn test_function_generic_defaults_at_call_sites() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic T = string
+            ---@return T
+            function use_default()
+            end
+
+            ---@generic T = string
+            ---@return T
+            function use_explicit()
+            end
+
+            ---@generic T = string
+            ---@param value T
+            ---@return T
+            function use_inferred(value)
+            end
+
+            DefaultResult = use_default()
+            ExplicitResult = use_explicit--[[@<number>]]()
+            InferredResult = use_inferred(1)
+            "#,
+        );
+
+        let default_result = ws.expr_ty("DefaultResult");
+        assert_eq!(ws.humanize_type(default_result), "string");
+        let explicit_result = ws.expr_ty("ExplicitResult");
+        assert_eq!(ws.humanize_type(explicit_result), "number");
+        let inferred_result = ws.expr_ty("InferredResult");
+        assert_eq!(ws.humanize_type(inferred_result), "integer");
+    }
+
+    #[test]
+    fn test_non_const_generic_call_inference_widens_literal_return() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic T
+            ---@param value T
+            ---@return T
+            function identity(value)
+            end
+
+            Result = identity("literal")
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "string");
+    }
+
+    #[test]
+    fn test_const_generic_call_inference_preserves_literal_return() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic const T
+            ---@param value T
+            ---@return T
+            function identity(value)
+            end
+
+            Result = identity("literal")
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "\"literal\"");
+    }
+
+    #[test]
+    fn test_function_generic_default_can_reference_earlier_param_at_call_sites() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic T = string, U = T[]
+            ---@return U
+            function use_nested_default()
+            end
+
+            DefaultResult = use_nested_default()
+            ExplicitResult = use_nested_default--[[@<number>]]()
+            "#,
+        );
+
+        let default_result = ws.expr_ty("DefaultResult");
+        assert_eq!(ws.humanize_type(default_result), "string[]");
+        let explicit_result = ws.expr_ty("ExplicitResult");
+        assert_eq!(ws.humanize_type(explicit_result), "number[]");
+    }
+
+    #[test]
+    fn test_function_variadic_generic_default_at_call_sites() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic T = string
+            ---@return T...
+            function use_default_vararg_ret()
+            end
+
+            ---@generic T: string
+            ---@return T...
+            function use_constraint_vararg_ret()
+            end
+
+            DefaultA, DefaultB = use_default_vararg_ret()
+            ConstraintResult = use_constraint_vararg_ret()
+            "#,
+        );
+
+        let default_a = ws.expr_ty("DefaultA");
+        assert_eq!(ws.humanize_type(default_a), "string");
+        let default_b = ws.expr_ty("DefaultB");
+        assert_eq!(ws.humanize_type(default_b), "string");
+        let constraint_result = ws.expr_ty("ConstraintResult");
+        assert_eq!(ws.humanize_type(constraint_result), "string");
+    }
+
+    #[test]
+    fn test_nested_function_keeps_unresolved_variadic_return_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic R
+            ---@return fun(): R...
+            function make()
+            end
+
+            local f = make()
+            Result = f()
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "unknown");
+    }
+
+    #[test]
+    fn test_generic_defaults_visible_before_cross_file_doc_analysis() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def_files(vec![
+            (
+                "use.lua",
+                r#"
+                ---@type Box
+                CrossFileBox = {}
+                "#,
+            ),
+            (
+                "decl.lua",
+                r#"
+                ---@class Box<T = string>
+                "#,
+            ),
+        ]);
+
+        let value_ty = ws.expr_ty("CrossFileBox");
+        assert_eq!(ws.humanize_type(value_ty), "Box<string>");
     }
 
     #[test]
@@ -773,10 +1766,13 @@ mod test {
                 ---@return Mock<T>
                 local function fn(a)
                 end
+                fnresult = fn()
 
                 result = fn().calls
             "#,
             );
+            let fnresult_ty = ws.expr_ty("fnresult");
+            assert_eq!(ws.humanize_type(fnresult_ty), "Mock<Procedure>");
 
             let result_ty = ws.expr_ty("result");
             assert_eq!(ws.humanize_type(result_ty), "any[][]");
@@ -789,8 +1785,6 @@ mod test {
         ws.def(
             r#"
             ---@alias std.RawGet<T, K> unknown
-
-            ---@alias std.ConstTpl<T> unknown
 
             ---@generic T, K extends keyof T
             ---@param object T
@@ -815,5 +1809,505 @@ mod test {
 
         let result_ty = ws.expr_ty("result");
         assert_eq!(ws.humanize_type(result_ty), "integer");
+    }
+
+    #[test]
+    fn test_extends_true() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::TypeNotFound,
+            r#"
+            ---@alias TestA<T> T extends "test" and number or string
+            ---@alias TestB<T> T extends true and number or string
+            ---@alias TestC<T> T extends 111 and number or string
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_conditional_generic_literal_check_operand_preserved() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias IsKnown<T> T extends ("one" | "two") and 1 or 2
+
+            ---@generic T
+            ---@return IsKnown<T>
+            function check_explicit()
+            end
+
+            ---@type IsKnown<"one">
+            Direct = nil
+
+            Result = check_explicit--[[@<"one">]]()
+            "#,
+        );
+
+        let direct_ty = ws.expr_ty("Direct");
+        assert_eq!(ws.humanize_type_detailed(direct_ty), "IsKnown<\"one\"> = 1");
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "1");
+    }
+
+    #[test]
+    fn test_issue_986() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Foo
+            ---@field cost number
+
+            ---@generic K extends keyof Foo
+            ---@param key K
+            ---@return Foo[K]
+            function get(key)
+            end
+
+            A = get('cost')
+        "#,
+        );
+        let result_ty = ws.expr_ty("A");
+        assert_eq!(ws.humanize_type(result_ty), "number");
+    }
+
+    #[test]
+    fn test_extends_conditional_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias Procedure fun(...: any...): any
+
+            ---@alias MockContextCalls<T> T extends any... and any[] or T
+
+            ---@alias ParametersNew<T extends function> T extends (fun(...: infer P): any) and P or never
+
+            ---@alias MockParameters<T> T extends Procedure and ParametersNew<T> or never
+
+            ---@class MockContext<T>
+            ---@field calls (MockContextCalls<MockParameters<T>>)[]
+
+            ---@class Mock<T>
+            ---@field ctx MockContext<T>
+
+            ---@type Mock<fun(...: any...): any>
+            local mock
+
+            Calls = mock.ctx.calls
+
+        "#,
+        );
+        let result_ty = ws.expr_ty("Calls");
+        assert_eq!(ws.humanize_type(result_ty), "any[][]");
+    }
+
+    #[test]
+    fn test_extends_conditional_generic_preserves_partial_instantiation() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias IdIfHasFoo<T> T extends { foo: any } and T or never
+
+            ---@class Inner<T>
+            ---@field value IdIfHasFoo<T>
+
+            ---@class Wrapper<U>
+            ---@field inner Inner<{ foo: U }>
+
+            ---@type Wrapper<string>
+            local wrapper
+
+            Value = wrapper.inner.value
+            Foo = wrapper.inner.value.foo
+        "#,
+        );
+
+        let value_ty = ws.expr_ty("Value");
+        let value_desc = ws.humanize_type_detailed(value_ty);
+        assert!(!value_desc.contains("foo: any"), "{value_desc}");
+
+        let foo_ty = ws.expr_ty("Foo");
+        let foo_desc = ws.humanize_type(foo_ty);
+        assert_ne!(foo_desc, "any", "{foo_desc}");
+    }
+
+    #[test]
+    fn test_generic_type_infer() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Base<T>
+            ---@alias Holder<V> V
+            "#,
+        );
+        {
+            // 根据 TS 的做法, 如果 Base<T> 没有声明约束, 那么这里应该是 any 并报错
+            ws.def(
+                r#"
+            ---@type Base
+            Base_A = {}
+            "#,
+            );
+
+            let v_ty = ws.expr_ty("Base_A");
+            assert_eq!(ws.humanize_type_detailed(v_ty), "any");
+            assert!(!ws.has_no_diagnostic(
+                DiagnosticCode::MissingTypeArgument,
+                r#"
+            ---@type Base
+            local a
+            "#,
+            ));
+            assert!(!ws.has_no_diagnostic(
+                DiagnosticCode::MissingTypeArgument,
+                r#"
+            ---@type Holder
+            local h
+            "#,
+            ));
+        }
+    }
+
+    #[test]
+    fn test_overload_self_generic_class_instance() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            --- @class A<T>
+            --- @overload fun(): self
+            local ClassA
+
+            --- @type A
+            a1 = {}
+
+            a2 = ClassA()
+
+            ---@type A<string>
+            a3 = ClassA()
+            "#,
+        );
+
+        let a1_ty = ws.expr_ty("a1");
+        assert!(a1_ty.is_any(), "{a1_ty:?}");
+
+        let a2_ty = ws.expr_ty("a2");
+        assert_eq!(ws.humanize_type(a2_ty), "A<unknown>");
+
+        let a3_ty = ws.expr_ty("a3");
+        assert_eq!(ws.humanize_type(a3_ty), "A<string>");
+    }
+
+    #[test]
+    fn test_overload_self_return_infers_class_generic_from_arg() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class BaseClass
+
+            ---@class ExtendedClass: BaseClass
+
+            ---@class GenericClass<T: BaseClass>
+            ---@overload fun(t: T): self
+            local GenericClass
+
+            return_val = GenericClass(
+                {} --[[@as ExtendedClass]]
+            )
+            "#,
+        );
+
+        let return_ty = ws.expr_ty("return_val");
+        assert_eq!(ws.humanize_type(return_ty), "GenericClass<ExtendedClass>");
+    }
+
+    #[test]
+    fn test_conditional_generic_missing_class_arg_uses_unknown_operand() {
+        let mut ws = VirtualWorkspace::new();
+        // `extends unknown` 几乎等效于返回`true`分支结果
+        // 只有在分发`never`时才返回`never`, 但本质上 `never` 分发并没有对`unknown`做判断
+        ws.def(
+            r#"
+            ---@alias IsString<T> T extends string and number or boolean
+            ---@alias ExtendsUnknown<T> T extends unknown and number or boolean
+
+            ---@class Box<T = unknown>
+            ---@field value T
+
+            ---@generic T
+            ---@param box Box<T>
+            ---@return IsString<T>
+            function get(box) end
+
+            ---@generic T
+            ---@param value T
+            ---@return ExtendsUnknown<T>
+            function getExtendsUnknown(value) end
+
+            ---@type Box
+            local box
+
+            Result = get(box)
+
+            ---@type string
+            local value
+
+            ExtendsUnknownResult = getExtendsUnknown(value)
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "boolean");
+
+        let extends_unknown_ty = ws.expr_ty("ExtendsUnknownResult");
+        assert_eq!(ws.humanize_type(extends_unknown_ty), "number");
+    }
+
+    #[test]
+    fn test_conditional_generic_concrete_type_extends_any_selects_true_branch() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias ExtendsAny<T> T extends any and number or boolean
+
+            ---@generic T
+            ---@param value T
+            ---@return ExtendsAny<T>
+            function getExtendsAny(value) end
+
+            ---@type string
+            local value
+
+            Result = getExtendsAny(value)
+            "#,
+        );
+
+        let result_ty = ws.expr_ty("Result");
+        assert_eq!(ws.humanize_type(result_ty), "number");
+    }
+
+    #[test]
+    fn test_union_never() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias Exclude<T, U> T extends U and never or T
+
+                ---@param value string
+                function test_union_never(value) end
+            "#,
+        );
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ParamTypeMismatch,
+            r#"
+
+            ---@type Exclude<string|nil, nil>
+            local a
+
+            test_union_never(a)
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_distributed_extract_keeps_matching_union_members() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias Extract<T, U> T extends U and T or never
+
+                ---@generic T
+                ---@param value T
+                ---@return Extract<T, string|nil>
+                function extract(value) end
+
+                ---@type string|integer|nil
+                local value
+
+                A = extract(value)
+            "#,
+        );
+
+        assert_eq!(ws.expr_ty("A"), ws.ty("string|nil"));
+    }
+
+    #[test]
+    fn test_distributed_extract_rejects_removed_union_member() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias Extract<T, U> T extends U and T or never
+
+                ---@generic T
+                ---@param value T
+                ---@return Extract<T, string|nil>
+                function extract(value) end
+
+                ---@param value string|nil
+                function accept(value) end
+            "#,
+        );
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::ParamTypeMismatch,
+            r#"
+                ---@type integer
+                local value
+
+                accept(extract(value))
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_distributed_literal_union_keeps_literal_member() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias Extract<T, U> T extends U and T or never
+
+                ---@generic T
+                ---@param value T
+                ---@return Extract<T, "a">
+                function extract(value) end
+
+                ---@type "a"|"b"
+                local value
+
+                A = extract(value)
+            "#,
+        );
+
+        let a_ty = ws.expr_ty("A");
+        assert_eq!(ws.humanize_type(a_ty), "\"a\"");
+    }
+
+    #[test]
+    fn test_distributed_non_nullable_removes_nil() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias Exclude<T, U> T extends U and never or T
+
+                ---@generic T
+                ---@param value T
+                ---@return Exclude<T, nil>
+                function excludeNil(value) end
+
+                ---@type string|nil
+                local value
+
+                A = excludeNil(value)
+            "#,
+        );
+
+        assert_eq!(ws.expr_ty("A"), ws.ty("string"));
+    }
+
+    #[test]
+    fn test_distributed_never_remains_never() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias ToArray<T> T extends any and T[] or never
+
+                ---@generic T
+                ---@param value T
+                ---@return ToArray<T>
+                function toArray(value) end
+
+                ---@type never
+                local value
+
+                A = toArray(value)
+            "#,
+        );
+
+        assert_eq!(ws.expr_ty("A"), ws.ty("never"));
+    }
+
+    #[test]
+    fn test_wrapped_checked_type_does_not_distribute() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias Wrapped<T, U> { value: T } extends { value: U } and T or never
+
+                ---@generic T
+                ---@param value T
+                ---@return Wrapped<T, nil>
+                function wrapped(value) end
+
+                ---@type string|nil
+                local value
+
+                A = wrapped(value)
+            "#,
+        );
+
+        assert_eq!(ws.expr_ty("A"), ws.ty("string|nil"));
+    }
+
+    #[test]
+    fn test_tuple_wrapped_checked_type_does_not_distribute() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias WrappedTuple<T, U> [T] extends [U] and T or never
+
+                ---@generic T
+                ---@param value T
+                ---@return WrappedTuple<T, nil>
+                function wrappedTuple(value) end
+
+                ---@type string|nil
+                local value
+
+                A = wrappedTuple(value)
+            "#,
+        );
+
+        assert_eq!(ws.expr_ty("A"), ws.ty("string|nil"));
+    }
+
+    #[test]
+    fn test_distributed_conditional_infer_object_union() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias ValueOf<T> T extends { value: infer P } and P or never
+
+                ---@generic T
+                ---@param value T
+                ---@return ValueOf<T>
+                function valueOf(value) end
+
+                ---@type { value: string } | { value: integer }
+                local value
+
+                A = valueOf(value)
+            "#,
+        );
+
+        assert_eq!(ws.expr_ty("A"), ws.ty("string|integer"));
+    }
+
+    #[test]
+    fn test_conditional_infer_preserves_literal_from_type_level_source() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@alias ValueOf<T> T extends { value: infer P } and P or never
+
+                ---@type ValueOf<{ value: "one" }>
+                A = nil
+            "#,
+        );
+
+        let a_ty = ws.expr_ty("A");
+        assert_eq!(
+            ws.humanize_type_detailed(a_ty),
+            "ValueOf<{ value: \"one\" }> = \"one\""
+        );
     }
 }

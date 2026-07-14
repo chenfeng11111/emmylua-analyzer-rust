@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod test {
     use crate::{
-        LuaAstNode, LuaLanguageLevel, LuaNonStdSymbolSet, LuaParser, ParserConfig, set_locale,
+        LuaAstNode, LuaFeaturesSet, LuaLanguageLevel, LuaParser, ParserConfig, set_locale,
     };
     // use std::time::Instant;
     use std::{collections::HashMap, thread};
@@ -42,7 +42,7 @@ end
             LuaLanguageLevel::Lua51,
             None,
             HashMap::new(),
-            LuaNonStdSymbolSet::new(),
+            LuaFeaturesSet::default(),
             false,
         );
         let tree = LuaParser::parse(code, parse_config);
@@ -100,7 +100,29 @@ local t
             LuaLanguageLevel::Lua54,
             None,
             HashMap::new(),
-            LuaNonStdSymbolSet::new(),
+            LuaFeaturesSet::default(),
+            false,
+        );
+        let t = LuaParser::parse(code, c);
+        println!("{:#?}", t.get_red_root());
+    }
+
+    #[test]
+    fn test_error_syntax() {
+        let code = r#"
+
+function MyClass:Test1(data)
+    if self.nId == 123 and self. then
+
+    end
+    print("Test1")
+end"#;
+
+        let c = ParserConfig::new(
+            LuaLanguageLevel::Lua54,
+            None,
+            HashMap::new(),
+            LuaFeaturesSet::default(),
             false,
         );
         let t = LuaParser::parse(code, c);

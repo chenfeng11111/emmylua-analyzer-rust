@@ -1,5 +1,6 @@
 use emmylua_code_analysis::{
-    EmmyLuaAnalysis, WorkspaceFolder, collect_workspace_files, load_configs, update_code_style,
+    EmmyLuaAnalysis, WorkspaceFolder, build_workspace_folders, collect_workspace_files,
+    file_path_to_uri, load_configs, uri_to_file_path,
 };
 use fern::Dispatch;
 use log::LevelFilter;
@@ -13,7 +14,7 @@ fn root_from_configs(config_paths: &[PathBuf], fallback: &Path) -> PathBuf {
         // Need to convert to canonical path to ensure parent() is not an empty
         // string in the case the path is a relative basename.
         match config_path.canonicalize() {
-            Ok(path) => path.parent().unwrap().to_path_buf(),
+            Ok(path) => normalize_local_path(path.parent().unwrap().to_path_buf()),
             Err(err) => {
                 log::error!(
                     "Failed to canonicalize config path: \"{:?}\": {}",
@@ -58,12 +59,18 @@ pub fn setup_logger(verbose: bool) {
     }
 }
 
-pub fn load_workspace(
+pub async fn load_workspace(
     main_path: PathBuf,
     cmd_workspace_folders: Vec<PathBuf>,
     config_paths: Option<Vec<PathBuf>>,
     ignore: Option<Vec<String>>,
 ) -> Option<EmmyLuaAnalysis> {
+    let main_path = normalize_local_path(main_path);
+    let cmd_workspace_folders = cmd_workspace_folders
+        .into_iter()
+        .map(normalize_local_path)
+        .collect::<Vec<_>>();
+
     let (config_files, config_root): (Vec<PathBuf>, PathBuf) =
         if let Some(config_paths) = config_paths {
             (
@@ -90,7 +97,7 @@ pub fn load_workspace(
     );
     emmyrc.pre_process_emmyrc(&config_root);
 
-    let mut workspace_folders = cmd_workspace_folders
+    let workspace_folders = cmd_workspace_folders
         .iter()
         .map(|path| WorkspaceFolder::new(path.clone(), false))
         .collect::<Vec<WorkspaceFolder>>();
@@ -98,42 +105,32 @@ pub fn load_workspace(
     analysis.update_config(emmyrc.clone().into());
     analysis.init_std_lib(None);
 
-    for lib in &emmyrc.workspace.library {
-        let path = PathBuf::from(lib.get_path().clone());
-        analysis.add_library_workspace(path.clone());
-        workspace_folders.push(WorkspaceFolder::new(path.clone(), true));
-    }
-
-    for path in &workspace_folders {
-        analysis.add_main_workspace(path.root.clone());
-    }
-
-    for root in &emmyrc.workspace.workspace_roots {
-        analysis.add_main_workspace(PathBuf::from(root));
+    let workspace_folders = build_workspace_folders(&workspace_folders, &emmyrc);
+    for workspace in &workspace_folders {
+        if workspace.is_library {
+            analysis.add_library_workspace(workspace);
+        } else {
+            analysis.add_main_workspace(workspace.root.clone());
+        }
     }
 
     let file_infos = collect_workspace_files(&workspace_folders, &analysis.emmyrc, None, ignore);
     let files = file_infos
         .into_iter()
-        .filter_map(|file| {
-            if file.path.ends_with(".editorconfig") {
-                let file_path = PathBuf::from(file.path);
-                let parent_dir = file_path
-                    .parent()
-                    .unwrap()
-                    .to_path_buf()
-                    .to_string_lossy()
-                    .to_string()
-                    .replace("\\", "/");
-                let file_normalized = file_path.to_string_lossy().to_string().replace("\\", "/");
-                update_code_style(&parent_dir, &file_normalized);
-                None
-            } else {
-                Some(file.into_tuple())
-            }
-        })
+        .map(|file| file.into_tuple())
         .collect();
     analysis.update_files_by_path(files);
 
+    if analysis.check_schema_update() {
+        analysis.update_schema().await;
+    }
+
     Some(analysis)
+}
+
+pub(crate) fn normalize_local_path(path: PathBuf) -> PathBuf {
+    let path = path.canonicalize().unwrap_or(path);
+    file_path_to_uri(&path)
+        .and_then(|uri| uri_to_file_path(&uri))
+        .unwrap_or(path)
 }

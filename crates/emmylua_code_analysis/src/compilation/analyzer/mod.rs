@@ -6,17 +6,28 @@ mod infer_cache_manager;
 mod lua;
 mod unresolve;
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
 use crate::{
-    Emmyrc, FileId, InFiled, InferFailReason, WorkspaceId, db_index::DbIndex, profile::Profile,
+    Emmyrc, FileId, InFiled, InferFailReason, LuaType, LuaTypeDeclId,
+    db_index::{DbIndex, WorkspaceId},
+    profile::Profile,
 };
-use emmylua_parser::LuaChunk;
+use emmylua_parser::{LuaBlock, LuaChunk, LuaDocGenericDeclList, LuaExpr};
+use hashbrown::{HashMap, HashSet};
 use infer_cache_manager::InferCacheManager;
+use std::sync::Arc;
 use unresolve::UnResolve;
+
+pub(crate) use lua::{analyze_func_body_returns_with, analyze_return_point};
+
+pub(super) fn analyze_func_body_missing_return_flags_with<F>(
+    body: LuaBlock,
+    infer_expr_type: &mut F,
+) -> Result<(bool, bool), InferFailReason>
+where
+    F: FnMut(&LuaExpr) -> Result<LuaType, InferFailReason>,
+{
+    lua::func_body::analyze_func_body_missing_return_flags_with(body, infer_expr_type)
+}
 
 pub fn analyze(db: &mut DbIndex, need_analyzed_files: Vec<InFiled<LuaChunk>>, config: Arc<Emmyrc>) {
     if need_analyzed_files.is_empty() {
@@ -69,7 +80,11 @@ fn module_analyze(
             let mut context = AnalyzeContext::new(config);
             context.add_tree_chunk(in_filed_tree);
             return vec![(workspace_id, context)];
-        }
+        } else if db.get_vfs().is_remote_file(&file_id) {
+            let mut context = AnalyzeContext::new(config);
+            context.add_tree_chunk(in_filed_tree);
+            return vec![(WorkspaceId::REMOTE, context)];
+        };
 
         return vec![];
     }
@@ -95,6 +110,11 @@ fn module_analyze(
                 .entry(workspace_id)
                 .or_default()
                 .push(in_filed_tree);
+        } else if db.get_vfs().is_remote_file(&file_id) {
+            file_tree_map
+                .entry(WorkspaceId::REMOTE)
+                .or_default()
+                .push(in_filed_tree);
         }
     }
 
@@ -109,14 +129,14 @@ fn module_analyze(
     for (workspace_id, tree_list) in file_tree_map {
         let mut context = AnalyzeContext::new(config.clone());
         context.tree_list = tree_list;
-        if workspace_id.is_library() {
+        if workspace_id.is_library() || workspace_id.is_remote() {
             contexts.push((workspace_id, context));
         } else {
             main_vec.push((workspace_id, context));
         }
     }
 
-    contexts.sort_by(|a, b| a.0.cmp(&b.0));
+    contexts.sort_by_key(|a| a.0);
 
     contexts.extend(main_vec);
     contexts
@@ -131,6 +151,7 @@ pub struct AnalyzeContext {
     unresolves: Vec<(UnResolve, InferFailReason)>,
     infer_manager: InferCacheManager,
     pub workspace_id: Option<WorkspaceId>,
+    pending_type_generic_headers: Vec<PendingTypeGenericHeader>,
 }
 
 impl AnalyzeContext {
@@ -142,6 +163,7 @@ impl AnalyzeContext {
             unresolves: Vec::new(),
             infer_manager: InferCacheManager::new(),
             workspace_id: None,
+            pending_type_generic_headers: Vec::new(),
         }
     }
 
@@ -156,4 +178,29 @@ impl AnalyzeContext {
     pub fn add_unresolve(&mut self, un_resolve: UnResolve, reason: InferFailReason) {
         self.unresolves.push((un_resolve, reason));
     }
+
+    pub fn add_pending_type_generic_header(
+        &mut self,
+        file_id: FileId,
+        type_id: LuaTypeDeclId,
+        generic_decl_list: LuaDocGenericDeclList,
+    ) {
+        self.pending_type_generic_headers
+            .push(PendingTypeGenericHeader {
+                file_id,
+                type_id,
+                generic_decl_list,
+            });
+    }
+
+    pub(super) fn take_pending_type_generic_headers(&mut self) -> Vec<PendingTypeGenericHeader> {
+        std::mem::take(&mut self.pending_type_generic_headers)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingTypeGenericHeader {
+    pub file_id: FileId,
+    pub type_id: LuaTypeDeclId,
+    pub generic_decl_list: LuaDocGenericDeclList,
 }

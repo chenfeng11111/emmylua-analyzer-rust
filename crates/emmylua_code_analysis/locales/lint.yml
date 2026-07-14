@@ -245,6 +245,10 @@ Cannot use `...` outside a vararg function.:
   en: "type `%{found}` does not satisfy the constraint `%{source}`. %{reason}"
   zh_CN: "泛型约束要求为 `%{source}` 的子类, 但找到了 `%{found}`. %{reason}"
   zh_HK: "泛型约束要求为 `%{source}` 的子类, 但找到了 `%{found}`. %{reason}"
+"Generic type '%{name}' requires %{count} type argument(s)":
+  en: "Generic type '%{name}' requires %{count} type argument(s)"
+  zh_CN: "泛型类型“%{name}”需要 %{count} 个类型参数"
+  zh_HK: "泛型類型「%{name}」需要 %{count} 個類型參數"
 "the string template type does not match any type declaration":
   en: "the string template type does not match any type declaration"
   zh_CN: "字符串模板类型与任何类型声明不匹配"
@@ -261,10 +265,10 @@ Cannot use `...` outside a vararg function.:
   en: "type recursion"
   zh_CN: "类型递归"
   zh_HK: "類型遞歸"
-"Module '%{module}' is not visible. It has @export restrictions.":
-  en: "Module '%{module}' is not visible. It has @export restrictions."
-  zh_CN: "模块 '%{module}' 不可见。它有 @export 限制。"
-  zh_HK: "模組 '%{module}' 不可見。它有 @export 限制。"
+"module '%{module}' visibility is not `public`":
+  en: "module '%{module}' visibility is not `public`"
+  zh_CN: "模块 '%{module}' 可见性不为 `public`"
+  zh_HK: "模組 '%{module}' 可見性不為 `public`"
 "Unknown doc tag: `%{name}`":
   en: "Unknown doc tag: `%{name}`"
   # TODO: translate
@@ -273,3 +277,13 @@ Cannot use `...` outside a vararg function.:
   en: "Value '%{value}' does not match any enum value. Expected one of: %{enum_values}"
   zh_CN: "值 '%{value}' 与任何枚举值都不匹配。应为以下之一: %{enum_values}"
   zh_HK: "值 '%{value}' 與任何枚舉值都不匹配。應為以下之一: %{enum_values}"
+
+"Type '%{name}' has inconsistent access modifiers: %{modifiers}.":
+  en: "Type '%{name}' has inconsistent access modifiers: %{modifiers}."
+  zh_CN: "类型 '%{name}' 具有不一致的访问修饰符: %{modifiers}."
+  zh_HK: "類型 '%{name}' 具有不一致的訪問修飾符: %{modifiers}."
+
+"Missing comment for function `%{name}`.":
+  en: "Missing comment for function `%{name}`."
+  zh_CN: "函数 `%{name}` 缺少注解。"
+  zh_HK: "函式 `%{name}` 缺少註解。"

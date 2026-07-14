@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use crate::{DbIndex, LuaType, get_real_type};
 
 pub fn intersect_type(db: &DbIndex, source: LuaType, target: LuaType) -> LuaType {
@@ -49,6 +47,8 @@ pub fn intersect_type(db: &DbIndex, source: LuaType, target: LuaType) -> LuaType
         // TODO: Intersecting two non-identical function types currently falls back to `never`.
         // Consider implementing a proper intersection (or overload-set semantics) for function
         // signatures instead of treating it as incompatible.
+        // same type
+        (left, right) if *left == right => source.clone(),
         // class references
         (LuaType::Ref(id1), LuaType::Ref(id2)) => {
             if id1 == id2 {
@@ -81,7 +81,7 @@ pub fn intersect_type(db: &DbIndex, source: LuaType, target: LuaType) -> LuaType
         }
         // union ∩ non-union: (A | B) ∩ C = (A ∩ C) | (B ∩ C)
         (LuaType::Union(left), right) if !right.is_union() => {
-            let left_types = left.deref().clone().into_vec();
+            let left_types = left.into_vec();
             let mut result_types = Vec::new();
 
             for left_type in left_types {
@@ -99,7 +99,7 @@ pub fn intersect_type(db: &DbIndex, source: LuaType, target: LuaType) -> LuaType
         }
         // non-union ∩ union: A ∩ (B | C) = (A ∩ B) | (A ∩ C)
         (left, LuaType::Union(right)) if !left.is_union() => {
-            let right_types = right.deref().clone().into_vec();
+            let right_types = right.into_vec();
             let mut result_types = Vec::new();
 
             for right_type in right_types {
@@ -117,8 +117,8 @@ pub fn intersect_type(db: &DbIndex, source: LuaType, target: LuaType) -> LuaType
         }
         // union ∩ union: (A | B) ∩ (C | D) = (A ∩ C) | (A ∩ D) | (B ∩ C) | (B ∩ D)
         (LuaType::Union(left), LuaType::Union(right)) => {
-            let left_types = left.deref().clone().into_vec();
-            let right_types = right.deref().clone().into_vec();
+            let left_types = left.into_vec();
+            let right_types = right.into_vec();
             let mut result_types = Vec::new();
 
             for left_type in left_types {
@@ -137,8 +137,6 @@ pub fn intersect_type(db: &DbIndex, source: LuaType, target: LuaType) -> LuaType
             }
         }
 
-        // same type
-        (left, right) if *left == right => source.clone(),
         _ => LuaType::Never,
     }
 }

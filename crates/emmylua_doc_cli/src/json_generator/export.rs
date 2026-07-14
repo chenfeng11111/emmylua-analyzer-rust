@@ -194,7 +194,7 @@ fn export_generics(db: &DbIndex, type_decl_id: &LuaTypeDeclId) -> Vec<TypeVar> {
         .map(|it| TypeVar {
             name: it.name.to_string(),
             base: it
-                .type_constraint
+                .constraint
                 .as_ref()
                 .map(|typ| render_typ(db, typ, RenderLevel::Simple)),
         })
@@ -219,7 +219,7 @@ fn export_members(db: &DbIndex, member_owner: LuaMemberOwner) -> Vec<Member> {
                 let name = match member_key {
                     LuaMemberKey::Name(name) => name.to_string(),
                     LuaMemberKey::Integer(i) => format!("[{i}]"),
-                    LuaMemberKey::ExprType(typ) => {
+                    LuaMemberKey::TypeKey(typ) => {
                         format!("[{}]", render_typ(db, typ, RenderLevel::Simple))
                     }
                     _ => return None,

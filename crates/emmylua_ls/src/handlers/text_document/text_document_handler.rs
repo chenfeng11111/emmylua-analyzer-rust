@@ -28,6 +28,11 @@ pub async fn on_did_open_text_document(
         }
     };
 
+    {
+        let mut workspace = context.workspace_manager().write().await;
+        workspace.sync_open_file(uri.clone(), text.clone());
+    }
+
     if !should_process {
         return None;
     }
@@ -52,12 +57,6 @@ pub async fn on_did_open_text_document(
         }
     }
 
-    // Update open files list
-    {
-        let mut workspace = context.workspace_manager().write().await;
-        workspace.current_open_files.insert(uri);
-    }
-
     Some(())
 }
 
@@ -74,6 +73,7 @@ pub async fn on_did_save_text_document(
                 .await;
             let workspace_manager = context.workspace_manager().write().await;
             workspace_manager.update_workspace_version(WorkspaceDiagnosticLevel::Slow, true);
+            workspace_manager.check_schema_update().await;
         }
 
         return Some(());
@@ -85,9 +85,8 @@ pub async fn on_did_save_text_document(
         duration = 1000;
     }
     let workspace = context.workspace_manager().read().await;
-    workspace
-        .reindex_workspace(Duration::from_millis(duration))
-        .await;
+    workspace.reindex_workspace(Duration::from_millis(duration));
+    workspace.check_schema_update().await;
     Some(())
 }
 
@@ -112,6 +111,11 @@ pub async fn on_did_change_text_document(
         }
     };
 
+    {
+        let mut workspace = context.workspace_manager().write().await;
+        workspace.sync_open_file(uri.clone(), text.clone());
+    }
+
     if !should_process {
         return None;
     }
@@ -130,7 +134,7 @@ pub async fn on_did_change_text_document(
     // Handle reindex without holding locks
     if emmyrc.workspace.enable_reindex {
         let workspace = context.workspace_manager().read().await;
-        workspace.extend_reindex_delay().await;
+        workspace.extend_reindex_delay();
     }
 
     // Schedule diagnostic task
@@ -152,9 +156,7 @@ pub async fn on_did_close_document(
 ) -> Option<()> {
     let uri = &params.text_document.uri;
     let mut workspace = context.workspace_manager().write().await;
-    workspace
-        .current_open_files
-        .remove(&params.text_document.uri);
+    workspace.close_open_file(&params.text_document.uri);
     drop(workspace);
     let lsp_features = context.lsp_features();
 

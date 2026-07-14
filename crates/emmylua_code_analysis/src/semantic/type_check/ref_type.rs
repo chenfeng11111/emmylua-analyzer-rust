@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::{
-    LuaMemberKey, LuaMemberOwner, LuaObjectType, LuaTupleType, LuaType, LuaTypeCache, LuaTypeDecl,
-    LuaTypeDeclId, RenderLevel, humanize_type,
+    LuaMemberKey, LuaMemberOwner, LuaObjectType, LuaTupleType, LuaType, LuaTypeDecl, LuaTypeDeclId,
+    RenderLevel, humanize_type,
     semantic::{
         member::find_members,
         type_check::{
@@ -36,14 +36,39 @@ pub fn check_ref_type_compact(
         })?;
 
     if type_decl.is_alias() {
+        // Alias 期望类型需要接受实际 union 的每个分支.
+        if let LuaType::Union(compact_union) = compact_type {
+            for compact_sub_type in compact_union.into_vec() {
+                check_ref_type_compact(
+                    context,
+                    source_id,
+                    &compact_sub_type,
+                    check_guard.next_level()?,
+                )?;
+            }
+            return Ok(());
+        }
+
         if let Some(origin_type) = type_decl.get_alias_origin(context.db, None) {
+            // 递归 alias 的直接成员已经属于 alias 本身, 提前通过避免继续展开自引用.
+            let origin_contains_compact = match &origin_type {
+                LuaType::Union(origin_union) => origin_union
+                    .into_vec()
+                    .iter()
+                    .any(|origin_sub_type| origin_sub_type == compact_type),
+                _ => origin_type == *compact_type,
+            };
+            if origin_contains_compact {
+                return Ok(());
+            }
+
             let result = check_general_type_compact(
                 context,
                 &origin_type,
                 compact_type,
                 check_guard.next_level()?,
             );
-            if result.is_err() && origin_type.is_function() {
+            if result.is_err() && should_retry_alias_nominal_check(compact_type) {
                 return check_ref_class(context, source_id, compact_type, check_guard);
             }
             return result;
@@ -56,6 +81,16 @@ pub fn check_ref_type_compact(
         check_ref_enum(context, source_id, compact_type, check_guard, type_decl)
     } else {
         check_ref_class(context, source_id, compact_type, check_guard)
+    }
+}
+
+fn should_retry_alias_nominal_check(compact_type: &LuaType) -> bool {
+    match compact_type {
+        LuaType::Ref(_) | LuaType::Def(_) => true,
+        LuaType::Generic(generic) => {
+            matches!(generic.get_base_type(), LuaType::Ref(_) | LuaType::Def(_))
+        }
+        _ => false,
     }
 }
 
@@ -105,16 +140,13 @@ fn check_ref_enum(
         _ => compact_type.clone(),
     };
 
-    // 当 enum 的值全为整数常量时, 可能会用于位运算, 此时右值推断为整数
+    // 整数 enum 参与位运算时结果会被推断为宽泛 Integer, 但直接写入整数常量仍需匹配 enum 字段.
     if let LuaType::Union(union_types) = &enum_fields
         && union_types
             .into_vec()
             .iter()
             .all(|t| matches!(t, LuaType::DocIntegerConst(_) | LuaType::IntegerConst(_)))
-        && matches!(
-            compact_type,
-            LuaType::Integer | LuaType::DocIntegerConst(_) | LuaType::IntegerConst(_)
-        )
+        && matches!(compact_type, LuaType::Integer)
     {
         return Ok(());
     }
@@ -242,15 +274,19 @@ fn check_ref_type_compact_table(
     check_guard: TypeCheckGuard,
 ) -> TypeCheckResult {
     let member_index = context.db.get_member_index();
-    let table_member_map: HashMap<_, _> = member_index
-        .get_members(&table_owner)
-        .map(|members| {
-            members
-                .iter()
-                .map(|m| (m.get_key().clone(), m.get_id()))
-                .collect()
+    let table_members = member_index.get_members(&table_owner).unwrap_or_default();
+    let table_member_map: HashMap<_, _> = table_members
+        .iter()
+        .map(|member| {
+            let member_type = context
+                .db
+                .get_type_index()
+                .get_type_cache(&member.get_id().into())
+                .map(|cache| cache.as_type().clone())
+                .unwrap_or(LuaType::Any);
+            (member.get_key().clone(), member_type)
         })
-        .unwrap_or_default();
+        .collect();
 
     let source_type_members =
         member_index.get_members(&LuaMemberOwner::Type(source_type_id.clone()));
@@ -263,48 +299,61 @@ fn check_ref_type_compact_table(
             .db
             .get_type_index()
             .get_type_cache(&source_member.get_id().into())
-            .unwrap_or(&LuaTypeCache::InferType(LuaType::Any))
-            .as_type();
+            .map(|cache| cache.as_type().clone())
+            .unwrap_or(LuaType::Any);
         let key = source_member.get_key();
 
         if context.is_key_checked(key) {
             continue;
         }
 
-        match table_member_map.get(key) {
-            Some(table_member_id) => {
-                let table_member = member_index
-                    .get_member(table_member_id)
-                    .ok_or(TypeCheckFailReason::TypeNotMatch)?;
-                let table_member_type = context
-                    .db
-                    .get_type_index()
-                    .get_type_cache(&table_member.get_id().into())
-                    .unwrap_or(&LuaTypeCache::InferType(LuaType::Any))
-                    .as_type();
+        if let LuaMemberKey::TypeKey(source_key_type) = key {
+            // 索引签名约束已有索引字段, 不要求表字面量必须包含索引字段.
+            for table_member in &table_members {
+                let Some(table_key_type) = table_member.get_key().to_index_type() else {
+                    continue;
+                };
 
-                if let Err(err) = check_general_type_compact(
+                let key_match = match check_general_type_compact(
                     context,
-                    source_member_type,
-                    table_member_type,
+                    source_key_type,
+                    &table_key_type,
                     check_guard.next_level()?,
-                ) && err.is_type_not_match()
-                {
-                    if !context.detail {
-                        return Err(TypeCheckFailReason::TypeNotMatch);
-                    }
+                ) {
+                    Ok(_) => true,
+                    Err(err) if err.is_type_not_match() => false,
+                    Err(err) => return Err(err),
+                };
 
-                    return Err(TypeCheckFailReason::TypeNotMatchWithReason(
-                        t!(
-                            "member %{name} type not match, expect %{expect}, got %{got}",
-                            name = key.to_path(),
-                            expect =
-                                humanize_type(context.db, source_member_type, RenderLevel::Simple),
-                            got = humanize_type(context.db, table_member_type, RenderLevel::Simple)
-                        )
-                        .to_string(),
-                    ));
+                if !key_match {
+                    continue;
                 }
+
+                let table_member_type = table_member_map
+                    .get(table_member.get_key())
+                    .unwrap_or(&LuaType::Any);
+                check_ref_member_type(
+                    context,
+                    table_member.get_key(),
+                    &source_member_type,
+                    table_member_type,
+                    check_guard,
+                )?;
+            }
+
+            context.mark_key_checked(key.clone());
+            continue;
+        }
+
+        match table_member_map.get(key) {
+            Some(table_member_type) => {
+                check_ref_member_type(
+                    context,
+                    key,
+                    &source_member_type,
+                    table_member_type,
+                    check_guard,
+                )?;
             }
             None if !source_member_type.is_optional() => {
                 if !context.detail {
@@ -342,6 +391,34 @@ fn check_ref_type_compact_table(
     Ok(())
 }
 
+fn check_ref_member_type(
+    context: &mut TypeCheckContext,
+    key: &LuaMemberKey,
+    expect: &LuaType,
+    got: &LuaType,
+    check_guard: TypeCheckGuard,
+) -> TypeCheckResult {
+    if let Err(err) = check_general_type_compact(context, expect, got, check_guard.next_level()?)
+        && err.is_type_not_match()
+    {
+        if !context.detail {
+            return Err(TypeCheckFailReason::TypeNotMatch);
+        }
+
+        return Err(TypeCheckFailReason::TypeNotMatchWithReason(
+            t!(
+                "member %{name} type not match, expect %{expect}, got %{got}",
+                name = key.to_path(),
+                expect = humanize_type(context.db, expect, RenderLevel::Simple),
+                got = humanize_type(context.db, got, RenderLevel::Simple)
+            )
+            .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn check_ref_type_compact_object(
     context: &mut TypeCheckContext,
     object_type: &LuaObjectType,
@@ -363,28 +440,7 @@ fn check_ref_type_compact_object(
 
         match get_object_field_type(object_type, &key) {
             Some(field_type) => {
-                if let Err(err) = check_general_type_compact(
-                    context,
-                    &source_member_type,
-                    field_type,
-                    check_guard.next_level()?,
-                ) && err.is_type_not_match()
-                {
-                    if !context.detail {
-                        return Err(TypeCheckFailReason::TypeNotMatch);
-                    }
-
-                    return Err(TypeCheckFailReason::TypeNotMatchWithReason(
-                        t!(
-                            "member %{name} type not match, expect %{expect}, got %{got}",
-                            name = key.to_path(),
-                            expect =
-                                humanize_type(context.db, &source_member_type, RenderLevel::Simple),
-                            got = humanize_type(context.db, field_type, RenderLevel::Simple)
-                        )
-                        .to_string(),
-                    ));
-                }
+                check_ref_member_type(context, &key, &source_member_type, field_type, check_guard)?;
             }
             None if !source_member_type.is_optional() => {
                 if !context.detail {
@@ -408,7 +464,7 @@ fn get_object_field_type<'a>(
     key: &LuaMemberKey,
 ) -> Option<&'a LuaType> {
     object_type.get_field(key).or_else(|| {
-        if let LuaMemberKey::ExprType(t) = key {
+        if let LuaMemberKey::TypeKey(t) = key {
             object_type
                 .get_index_access()
                 .iter()
@@ -444,6 +500,9 @@ fn check_ref_type_compact_tuple(
                 }
 
                 let Some(tuple_type) = tuple_types.get(*index as usize - 1) else {
+                    if member.typ.is_optional() {
+                        continue;
+                    }
                     return Err(TypeCheckFailReason::TypeNotMatch);
                 };
 
@@ -454,7 +513,7 @@ fn check_ref_type_compact_tuple(
                     check_guard.next_level()?,
                 )?;
             }
-            LuaMemberKey::ExprType(LuaType::Integer) => {
+            LuaMemberKey::TypeKey(LuaType::Integer) => {
                 // 遍历元组确定所有内容是否匹配
                 for tuple_type in tuple_types {
                     check_general_type_compact(
@@ -466,6 +525,9 @@ fn check_ref_type_compact_tuple(
                 }
             }
             _ => {
+                if member.typ.is_optional() {
+                    continue;
+                }
                 return Err(TypeCheckFailReason::TypeNotMatch);
             }
         }

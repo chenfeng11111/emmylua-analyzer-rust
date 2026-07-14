@@ -97,6 +97,8 @@ pub enum DiagnosticCode {
     GenericConstraintMismatch,
     /// cast-type-mismatch
     CastTypeMismatch,
+    /// unresolved-require
+    UnresolvedRequire,
     /// require-module-not-visible
     RequireModuleNotVisible,
     /// enum-value-mismatch
@@ -118,6 +120,10 @@ pub enum DiagnosticCode {
     InvertIf,
     /// Call to a non-callable value
     CallNonCallable,
+    /// inconsistent-type-access-modifier
+    InconsistentTypeAccessModifier,
+    /// missing-type-argument
+    MissingTypeArgument,
     #[serde(other)]
     None,
 }
@@ -143,6 +149,7 @@ pub fn get_default_severity(code: DiagnosticCode) -> DiagnosticSeverity {
         DiagnosticCode::AnnotationUsageError => DiagnosticSeverity::ERROR,
         DiagnosticCode::RedefinedLocal => DiagnosticSeverity::HINT,
         DiagnosticCode::DuplicateRequire => DiagnosticSeverity::HINT,
+        DiagnosticCode::UnresolvedRequire => DiagnosticSeverity::WARNING,
         DiagnosticCode::IterVariableReassign => DiagnosticSeverity::ERROR,
         DiagnosticCode::PreferredLocalAlias => DiagnosticSeverity::HINT,
         DiagnosticCode::CallNonCallable => DiagnosticSeverity::WARNING,

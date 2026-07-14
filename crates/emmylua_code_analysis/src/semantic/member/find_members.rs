@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 
 use smol_str::SmolStr;
 
 use crate::{
     DbIndex, FileId, InferGuardRef, LuaGenericType, LuaInstanceType, LuaIntersectionType,
-    LuaMemberKey, LuaMemberOwner, LuaObjectType, LuaSemanticDeclId, LuaTupleType, LuaType,
-    LuaTypeDeclId, LuaUnionType,
+    LuaMemberFeature, LuaMemberIndexItem, LuaMemberKey, LuaMemberOwner, LuaObjectType,
+    LuaSemanticDeclId, LuaTupleType, LuaType, LuaTypeDeclId, LuaTypeOwner, LuaUnionType,
     semantic::{
         InferGuard,
         generic::{TypeSubstitutor, instantiate_type_generic},
@@ -30,7 +30,16 @@ pub enum FindMemberFilter {
 }
 
 pub fn find_members(db: &DbIndex, prefix_type: &LuaType) -> FindMembersResult {
-    let ctx = FindMembersContext::new(InferGuard::new());
+    let ctx = FindMembersContext::new(FileId::VIRTUAL, InferGuard::new());
+    find_members_guard(db, prefix_type, &ctx, &FindMemberFilter::All)
+}
+
+pub fn find_members_in_scope(
+    db: &DbIndex,
+    file_id: FileId,
+    prefix_type: &LuaType,
+) -> FindMembersResult {
+    let ctx = FindMembersContext::new(file_id, InferGuard::new());
     find_members_guard(db, prefix_type, &ctx, &FindMemberFilter::All)
 }
 
@@ -40,7 +49,26 @@ pub fn find_members_with_key(
     member_key: LuaMemberKey,
     find_all: bool,
 ) -> FindMembersResult {
-    let ctx = FindMembersContext::new(InferGuard::new());
+    let ctx = FindMembersContext::new(FileId::VIRTUAL, InferGuard::new());
+    find_members_guard(
+        db,
+        prefix_type,
+        &ctx,
+        &FindMemberFilter::ByKey {
+            member_key,
+            find_all,
+        },
+    )
+}
+
+pub fn find_members_with_key_in_scope(
+    db: &DbIndex,
+    file_id: FileId,
+    prefix_type: &LuaType,
+    member_key: LuaMemberKey,
+    find_all: bool,
+) -> FindMembersResult {
+    let ctx = FindMembersContext::new(file_id, InferGuard::new());
     find_members_guard(
         db,
         prefix_type,
@@ -54,19 +82,22 @@ pub fn find_members_with_key(
 
 #[derive(Clone)]
 struct FindMembersContext {
+    file_id: FileId,
     infer_guard: InferGuardRef,
     substitutor: Option<TypeSubstitutor>,
 }
 
 impl FindMembersContext {
-    fn new(infer_guard: InferGuardRef) -> Self {
+    fn new(file_id: FileId, infer_guard: InferGuardRef) -> Self {
         Self {
+            file_id,
             infer_guard,
             substitutor: None,
         }
     }
     fn with_substitutor(&self, substitutor: TypeSubstitutor) -> Self {
         Self {
+            file_id: self.file_id,
             infer_guard: self.infer_guard.clone(),
             substitutor: Some(substitutor),
         }
@@ -74,6 +105,7 @@ impl FindMembersContext {
 
     fn fork_infer(&self) -> Self {
         Self {
+            file_id: self.file_id,
             infer_guard: self.infer_guard.fork(),
             substitutor: self.substitutor.clone(),
         }
@@ -89,6 +121,10 @@ impl FindMembersContext {
 
     fn infer_guard(&self) -> &InferGuardRef {
         &self.infer_guard
+    }
+
+    fn file_id(&self) -> FileId {
+        self.file_id
     }
 }
 
@@ -177,7 +213,7 @@ fn find_table_generic_members(
 
     let key_type = ctx.instantiate_type(db, &table_type[0]);
     let value_type = ctx.instantiate_type(db, &table_type[1]);
-    let member_key = LuaMemberKey::ExprType(key_type);
+    let member_key = LuaMemberKey::TypeKey(key_type);
 
     if should_include_member(&member_key, filter) {
         members.push(LuaMemberInfo {
@@ -197,6 +233,17 @@ fn find_normal_members(
     member_owner: LuaMemberOwner,
     filter: &FindMemberFilter,
 ) -> FindMembersResult {
+    if let FindMemberFilter::ByKey {
+        member_key,
+        find_all,
+    } = filter
+    {
+        let member_item = db
+            .get_member_index()
+            .get_member_item(&member_owner, member_key)?;
+        return collect_member_infos_from_item(db, ctx, member_item, *find_all);
+    }
+
     let mut members = Vec::new();
     let member_index = db.get_member_index();
     let owner_members = member_index.get_members(&member_owner)?;
@@ -205,18 +252,14 @@ fn find_normal_members(
         let member_key = member.get_key().clone();
 
         if should_include_member(&member_key, filter) {
-            let raw_type = db
-                .get_type_index()
-                .get_type_cache(&member.get_id().into())
-                .map(|t| t.as_type().clone())
-                .unwrap_or(LuaType::Unknown);
-            members.push(LuaMemberInfo {
-                property_owner_id: Some(LuaSemanticDeclId::Member(member.get_id())),
-                key: member_key,
-                typ: ctx.instantiate_type(db, &raw_type),
-                feature: Some(member.get_feature()),
-                overload_index: None,
-            });
+            members.push(semantic_decl_to_member_info(
+                db,
+                ctx,
+                LuaTypeOwner::Member(member.get_id()),
+                LuaSemanticDeclId::Member(member.get_id()),
+                member_key,
+                Some(member.get_feature()),
+            ));
 
             if should_stop_collecting(members.len(), filter) {
                 break;
@@ -225,6 +268,55 @@ fn find_normal_members(
     }
 
     Some(members)
+}
+
+fn collect_member_infos_from_item(
+    db: &DbIndex,
+    ctx: &FindMembersContext,
+    member_item: &LuaMemberIndexItem,
+    find_all: bool,
+) -> FindMembersResult {
+    let mut members = Vec::new();
+    for member_id in member_item.get_member_ids() {
+        let member = db.get_member_index().get_member(&member_id)?;
+        members.push(semantic_decl_to_member_info(
+            db,
+            ctx,
+            LuaTypeOwner::Member(member.get_id()),
+            LuaSemanticDeclId::Member(member.get_id()),
+            member.get_key().clone(),
+            Some(member.get_feature()),
+        ));
+
+        if !find_all {
+            break;
+        }
+    }
+
+    Some(members)
+}
+
+fn semantic_decl_to_member_info(
+    db: &DbIndex,
+    ctx: &FindMembersContext,
+    type_owner: LuaTypeOwner,
+    property_owner_id: LuaSemanticDeclId,
+    key: LuaMemberKey,
+    feature: Option<LuaMemberFeature>,
+) -> LuaMemberInfo {
+    let raw_type = db
+        .get_type_index()
+        .get_type_cache(&type_owner)
+        .map(|t| t.as_type().clone())
+        .unwrap_or(LuaType::Unknown);
+
+    LuaMemberInfo {
+        property_owner_id: Some(property_owner_id),
+        key,
+        typ: ctx.instantiate_type(db, &raw_type),
+        feature,
+        overload_index: None,
+    }
 }
 
 fn find_custom_type_members(
@@ -246,25 +338,37 @@ fn find_custom_type_members(
 
     let mut members = Vec::new();
     let member_index = db.get_member_index();
-    if let Some(type_members) =
-        member_index.get_members(&LuaMemberOwner::Type(type_decl_id.clone()))
+    let type_owner = LuaMemberOwner::Type(type_decl_id.clone());
+    if let FindMemberFilter::ByKey {
+        member_key,
+        find_all,
+    } = filter
     {
+        if let Some(member_item) = member_index.get_member_item(&type_owner, member_key) {
+            members.extend(collect_member_infos_from_item(
+                db,
+                ctx,
+                member_item,
+                *find_all,
+            )?);
+
+            if should_stop_collecting(members.len(), filter) {
+                return Some(members);
+            }
+        }
+    } else if let Some(type_members) = member_index.get_members(&type_owner) {
         for member in type_members {
             let member_key = member.get_key().clone();
 
             if should_include_member(&member_key, filter) {
-                let raw_type = db
-                    .get_type_index()
-                    .get_type_cache(&member.get_id().into())
-                    .map(|t| t.as_type().clone())
-                    .unwrap_or(LuaType::Unknown);
-                members.push(LuaMemberInfo {
-                    property_owner_id: Some(LuaSemanticDeclId::Member(member.get_id())),
-                    key: member_key,
-                    typ: ctx.instantiate_type(db, &raw_type),
-                    feature: Some(member.get_feature()),
-                    overload_index: None,
-                });
+                members.push(semantic_decl_to_member_info(
+                    db,
+                    ctx,
+                    LuaTypeOwner::Member(member.get_id()),
+                    LuaSemanticDeclId::Member(member.get_id()),
+                    member_key,
+                    Some(member.get_feature()),
+                ));
 
                 if should_stop_collecting(members.len(), filter) {
                     return Some(members);
@@ -401,7 +505,7 @@ fn find_intersection_members(
             }
 
             match members.entry(member.key.clone()) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
+                hashbrown::hash_map::Entry::Vacant(entry) => {
                     order.push(member.key.clone());
                     entry.insert(LuaMemberInfo {
                         property_owner_id: member.property_owner_id.clone(),
@@ -411,7 +515,7 @@ fn find_intersection_members(
                         overload_index: None,
                     });
                 }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                hashbrown::hash_map::Entry::Occupied(mut entry) => {
                     entry.get_mut().typ =
                         intersect_member_types(db, entry.get().typ.clone(), member.typ.clone());
                 }
@@ -486,18 +590,14 @@ fn find_global_members(
             let member_key = LuaMemberKey::Name(decl.get_name().to_string().into());
 
             if should_include_member(&member_key, filter) {
-                let raw_type = db
-                    .get_type_index()
-                    .get_type_cache(&decl_id.into())
-                    .map(|t| t.as_type().clone())
-                    .unwrap_or(LuaType::Unknown);
-                members.push(LuaMemberInfo {
-                    property_owner_id: Some(LuaSemanticDeclId::LuaDecl(decl_id)),
-                    key: member_key,
-                    typ: ctx.instantiate_type(db, &raw_type),
-                    feature: None,
-                    overload_index: None,
-                });
+                members.push(semantic_decl_to_member_info(
+                    db,
+                    ctx,
+                    LuaTypeOwner::Decl(decl_id),
+                    LuaSemanticDeclId::LuaDecl(decl_id),
+                    member_key,
+                    None,
+                ));
 
                 if should_stop_collecting(members.len(), filter) {
                     break;
@@ -544,7 +644,9 @@ fn find_namespace_members(
 
     let prefix = format!("{}.", ns);
     let type_index = db.get_type_index();
-    let type_decl_id_map = type_index.find_type_decls(FileId::VIRTUAL, &prefix);
+    let file_id = ctx.file_id();
+    let type_decl_id_map =
+        type_index.find_type_decls(file_id, &prefix, db.resolve_workspace_id(file_id));
     for (name, type_decl_id) in type_decl_id_map {
         let member_key = LuaMemberKey::Name(name.clone().into());
 
@@ -561,7 +663,7 @@ fn find_namespace_members(
                     overload_index: None,
                 });
             } else {
-                let ns_type = LuaType::Namespace(SmolStr::new(format!("{}.{}", ns, &name)).into());
+                let ns_type = LuaType::Namespace(SmolStr::new(format!("{}.{}", ns, name)).into());
                 members.push(LuaMemberInfo {
                     property_owner_id: None,
                     key: member_key,

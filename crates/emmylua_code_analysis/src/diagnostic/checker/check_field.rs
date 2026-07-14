@@ -113,11 +113,17 @@ fn is_invalid_prefix_type(typ: &LuaType) -> bool {
             LuaType::Any
             | LuaType::Unknown
             | LuaType::Table
-            | LuaType::TplRef(_)
             | LuaType::StrTplRef(_)
             | LuaType::TableConst(_) => return true,
+            LuaType::TplRef(tpl) => match tpl.get_constraint() {
+                Some(constraint) => current_typ = constraint,
+                None => return true,
+            },
             LuaType::Instance(instance_typ) => {
                 current_typ = instance_typ.get_base();
+            }
+            LuaType::Intersection(intersection) => {
+                return intersection.get_types().iter().any(is_invalid_prefix_type);
             }
             _ => return false,
         }
@@ -142,6 +148,25 @@ pub(super) fn is_valid_member(
             // 如果类型是 Ref 的 enum, 那么需要检查变量是否为参数, 因为作为参数的 enum 本质上是 value 而不是 enum
             if check_enum_is_param(semantic_model, prefix_typ, index_expr).is_some() {
                 return None;
+            }
+        }
+        LuaType::Intersection(intersection) => {
+            // If any component of the intersection would pass the member check on its own,
+            // the intersection should also pass (e.g. unknown[] & { n: integer }).
+            for component in intersection.get_types() {
+                if is_valid_member(semantic_model, component, index_expr, index_key, code).is_some()
+                {
+                    return Some(());
+                }
+            }
+            // Even if no single component passes the early checks, the intersection's
+            // member lookup may still succeed (e.g. Tuple([Unknown]) & Object).
+            // Try inferring the index expression type directly.
+            if semantic_model
+                .get_index_decl_type(index_expr.clone())
+                .is_some()
+            {
+                return Some(());
             }
         }
         _ => {}
@@ -194,15 +219,14 @@ pub(super) fn is_valid_member(
 
     let key_type = if let LuaIndexKey::Expr(expr) = index_key {
         match semantic_model.infer_expr(expr.clone()) {
-            Ok(
-                LuaType::Any
-                | LuaType::Unknown
-                | LuaType::Table
-                | LuaType::TplRef(_)
-                | LuaType::StrTplRef(_),
-            ) => {
+            Ok(LuaType::Any | LuaType::Unknown | LuaType::Table) => {
                 return Some(());
             }
+            Ok(LuaType::TplRef(tpl)) => match tpl.get_constraint() {
+                Some(constraint) => constraint.clone(),
+                None => return Some(()),
+            },
+            Ok(LuaType::StrTplRef(_)) => return Some(()),
             Ok(typ) => typ,
             // 解析失败时认为其是合法的, 因为他可能没有标注类型
             Err(InferFailReason::UnResolveDeclType(_)) => {
@@ -245,7 +269,7 @@ pub(super) fn is_valid_member(
         if let Some(members) = semantic_model.get_member_infos(&prefix_type) {
             for info in &members {
                 match &info.key {
-                    LuaMemberKey::ExprType(typ) => {
+                    LuaMemberKey::TypeKey(typ) => {
                         if typ.is_string() {
                             if key_types
                                 .iter()
@@ -253,7 +277,9 @@ pub(super) fn is_valid_member(
                             {
                                 return Some(());
                             }
-                        } else if typ.is_integer() && key_types.iter().any(|typ| typ.is_integer()) {
+                        } else if key_types.iter().any(|key_type| {
+                            (typ.is_integer() && key_type.is_integer()) || key_type == typ
+                        }) {
                             return Some(());
                         }
                     }
@@ -357,6 +383,9 @@ fn get_key_types(db: &DbIndex, typ: &LuaType) -> HashSet<LuaType> {
                 type_set.insert(current_type);
             }
             LuaType::DocStringConst(_) | LuaType::DocIntegerConst(_) => {
+                type_set.insert(current_type);
+            }
+            LuaType::Boolean | LuaType::Thread | LuaType::Number | LuaType::Userdata => {
                 type_set.insert(current_type);
             }
             LuaType::Call(alias_call) => {

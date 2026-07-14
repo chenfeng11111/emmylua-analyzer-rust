@@ -3,9 +3,23 @@ mod test;
 
 use std::sync::Arc;
 
+pub(crate) use analyzer::{analyze_func_body_returns_with, analyze_return_point};
+
 use crate::{
-    Emmyrc, FileId, InFiled, LuaIndex, LuaInferCache, db_index::DbIndex, semantic::SemanticModel,
+    Emmyrc, FileId, InFiled, InferFailReason, LuaIndex, LuaInferCache, LuaType, db_index::DbIndex,
+    semantic::SemanticModel,
 };
+use emmylua_parser::{LuaBlock, LuaExpr};
+
+pub(crate) fn analyze_func_body_missing_return_flags_with<F>(
+    body: LuaBlock,
+    infer_expr_type: &mut F,
+) -> Result<(bool, bool), InferFailReason>
+where
+    F: FnMut(&LuaExpr) -> Result<LuaType, InferFailReason>,
+{
+    analyzer::analyze_func_body_missing_return_flags_with(body, infer_expr_type)
+}
 
 #[derive(Debug)]
 pub struct LuaCompilation {

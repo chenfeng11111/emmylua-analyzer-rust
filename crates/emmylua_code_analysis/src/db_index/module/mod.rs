@@ -5,15 +5,15 @@ mod workspace;
 
 use emmylua_parser::LuaVersionCondition;
 use log::{error, info};
-pub use module_info::ModuleInfo;
+pub use module_info::{ModuleInfo, ModuleVisibility};
 pub use module_node::{ModuleNode, ModuleNodeId};
 use regex::Regex;
 pub use workspace::{Workspace, WorkspaceId};
 
 use super::traits::LuaIndex;
-use crate::{Emmyrc, FileId};
+use crate::{Emmyrc, FileId, WorkspaceImport};
+use hashbrown::{HashMap, HashSet};
 use std::{
-    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -80,7 +80,7 @@ impl LuaModuleIndex {
         info!("update module pattern: {:?}", self.module_patterns);
     }
 
-    pub fn set_module_replace_patterns(&mut self, patterns: HashMap<String, String>) {
+    pub fn set_module_replace_patterns(&mut self, patterns: Vec<(String, String)>) {
         self.module_replace_vec.clear();
         for (key, value) in patterns {
             let key_pattern = match Regex::new(&key) {
@@ -147,8 +147,7 @@ impl LuaModuleIndex {
                     }
                 }
             };
-            if let std::collections::hash_map::Entry::Vacant(e) = self.module_nodes.entry(child_id)
-            {
+            if let hashbrown::hash_map::Entry::Vacant(e) = self.module_nodes.entry(child_id) {
                 let new_node = ModuleNode {
                     children: HashMap::new(),
                     file_ids: Vec::new(),
@@ -165,16 +164,16 @@ impl LuaModuleIndex {
         let node = self.module_nodes.get_mut(&parent_node_id)?;
 
         node.file_ids.push(file_id);
-        let module_name = match module_parts.last() {
-            Some(name) => name.to_string(),
-            None => return None,
+        let module_name = {
+            let name = module_parts.last()?;
+            name.to_string()
         };
         let module_info = ModuleInfo {
             file_id,
             full_module_name: module_parts.join("."),
             name: module_name.clone(),
             module_id: parent_node_id,
-            visible: true,
+            visible: ModuleVisibility::default(),
             export_type: None,
             version_conds: None,
             workspace_id,
@@ -201,9 +200,9 @@ impl LuaModuleIndex {
         self.file_module_map.get_mut(&file_id)
     }
 
-    pub fn set_module_visibility(&mut self, file_id: FileId, visible: bool) {
+    pub fn set_module_visibility(&mut self, file_id: FileId, visible: ModuleVisibility) {
         if let Some(module_info) = self.file_module_map.get_mut(&file_id) {
-            module_info.visible = visible;
+            module_info.set_visibility(visible);
         }
     }
 
@@ -219,56 +218,120 @@ impl LuaModuleIndex {
 
     pub fn find_module(&self, module_path: &str) -> Option<&ModuleInfo> {
         let module_path = module_path.replace(['\\', '/'], ".");
+        // require 路径已经和模块索引完全一致时, 优先保留原始命中结果.
+        if let Some(module_info) = self.find_module_by_normalized_path(&module_path) {
+            return Some(module_info);
+        }
+
+        // moduleMap 是用户显式配置的 require 路径重写规则, 需要在 fuzzy 兜底前尝试.
+        let mapped_module_path = if self.module_replace_vec.is_empty() {
+            None
+        } else {
+            let mapped_module_path = self.replace_module_path(&module_path);
+            if mapped_module_path == module_path {
+                None
+            } else {
+                Some(mapped_module_path)
+            }
+        };
+
+        if let Some(mapped_module_path) = mapped_module_path.as_deref()
+            && let Some(module_info) = self.find_module_by_normalized_path(mapped_module_path)
+        {
+            return Some(module_info);
+        }
+
+        if self.fuzzy_search {
+            // mapped 路径也允许使用 fuzzy 匹配, 但仍然排在原始路径 fuzzy 匹配之前.
+            if let Some(mapped_module_path) = mapped_module_path.as_deref() {
+                let mapped_module_parts: Vec<&str> = mapped_module_path.split('.').collect();
+                if let Some(last_name) = mapped_module_parts.last()
+                    && let Some(module_info) = self.fuzzy_find_module(mapped_module_path, last_name)
+                {
+                    return Some(module_info);
+                }
+            }
+
+            let module_parts: Vec<&str> = module_path.split('.').collect();
+            if let Some(last_name) = module_parts.last() {
+                return self.fuzzy_find_module(&module_path, last_name);
+            }
+        }
+
+        None
+    }
+
+    fn find_module_by_normalized_path(&self, module_path: &str) -> Option<&ModuleInfo> {
         let module_parts: Vec<&str> = module_path.split('.').collect();
         if module_parts.is_empty() {
             return None;
         }
 
-        let result = self.exact_find_module(&module_parts);
-        if result.is_some() {
-            return result;
-        }
-
-        if self.fuzzy_search {
-            let last_name = module_parts.last()?;
-
-            return self.fuzzy_find_module(&module_path, last_name);
-        }
-
-        None
+        self.exact_find_module(&module_parts)
     }
 
     fn exact_find_module(&self, module_parts: &Vec<&str>) -> Option<&ModuleInfo> {
         let mut parent_node_id = self.module_root_id;
         for part in module_parts {
             let parent_node = self.module_nodes.get(&parent_node_id)?;
-            let child_id = match parent_node.children.get(*part) {
-                Some(id) => *id,
-                None => return None,
+            let child_id = {
+                let id = parent_node.children.get(*part)?;
+                *id
             };
             parent_node_id = child_id;
         }
 
         let node = self.module_nodes.get(&parent_node_id)?;
-        let file_id = node.file_ids.first()?;
-        self.file_module_map.get(file_id)
-    }
-
-    fn fuzzy_find_module(&self, module_path: &str, last_name: &str) -> Option<&ModuleInfo> {
-        let file_ids = self.module_name_to_file_ids.get(last_name)?;
-        if file_ids.len() == 1 {
-            return self.file_module_map.get(&file_ids[0]);
-        }
-
-        // find the first matched module
-        for file_id in file_ids {
+        let prefer_non_hidden = node.file_ids.len() > 1;
+        let mut first_module = None;
+        for file_id in &node.file_ids {
             let module_info = self.file_module_map.get(file_id)?;
-            if module_info.full_module_name.ends_with(module_path) {
+            if first_module.is_none() {
+                first_module = Some(module_info);
+            }
+
+            if !prefer_non_hidden || !module_info.visible.is_hidden() {
                 return Some(module_info);
             }
         }
 
-        None
+        first_module
+    }
+
+    /// Find a module by suffix when exact lookup fails.
+    ///
+    /// Candidates must either exactly equal `module_path` or end with `.{module_path}`.
+    /// Among matches, prefer the one with the fewest leading path segments before the suffix,
+    /// then use lexicographic `full_module_name` ordering as a stable tie-break.
+    fn fuzzy_find_module(&self, module_path: &str, last_name: &str) -> Option<&ModuleInfo> {
+        let file_ids = self.module_name_to_file_ids.get(last_name)?;
+        let suffix_with_boundary = format!(".{}", module_path);
+        file_ids
+            .iter()
+            .filter_map(|file_id| {
+                let module_info = self.file_module_map.get(file_id)?;
+                let full_module_name = module_info.full_module_name.as_str();
+                let leading_segment_count = if full_module_name == module_path {
+                    Some(0)
+                } else {
+                    full_module_name
+                        .strip_suffix(&suffix_with_boundary)
+                        .map(|prefix| {
+                            prefix
+                                .split('.')
+                                .filter(|segment| !segment.is_empty())
+                                .count()
+                        })
+                }?;
+
+                Some((leading_segment_count, module_info))
+            })
+            .min_by(|(left_count, left_info), (right_count, right_info)| {
+                left_count
+                    .cmp(right_count)
+                    .then_with(|| left_info.full_module_name.cmp(&right_info.full_module_name))
+            })
+            .map(|(_, module_info)| module_info)
     }
 
     /// Find a module node by module path.
@@ -308,6 +371,9 @@ impl LuaModuleIndex {
         let mut matched_module_path: Option<(String, WorkspaceId)> = None;
         for workspace in &self.workspaces {
             if let Ok(relative_path) = path.strip_prefix(&workspace.root) {
+                if !workspace.import.includes_path(relative_path) {
+                    continue;
+                }
                 let relative_path_str = relative_path.to_str().unwrap_or("");
                 if relative_path_str.is_empty() {
                     if let Some(file_name) = workspace.root.file_prefix() {
@@ -366,15 +432,33 @@ impl LuaModuleIndex {
         None
     }
 
-    pub fn add_workspace_root(&mut self, root: PathBuf, workspace_id: WorkspaceId) {
-        if !self.workspaces.iter().any(|w| w.root == root) {
-            self.workspaces.push(Workspace::new(root, workspace_id));
+    pub fn add_workspace_root_with_import(
+        &mut self,
+        root: PathBuf,
+        import: WorkspaceImport,
+        workspace_id: WorkspaceId,
+    ) {
+        if !self
+            .workspaces
+            .iter()
+            .any(|w| w.root == root && w.import == import)
+        {
+            self.workspaces
+                .push(Workspace::new(root, import, workspace_id));
         }
+    }
+
+    pub fn add_workspace_root(&mut self, root: PathBuf, workspace_id: WorkspaceId) {
+        self.add_workspace_root_with_import(root, WorkspaceImport::All, workspace_id);
+    }
+
+    pub fn clear_non_std_workspaces(&mut self) {
+        self.workspaces.retain(|workspace| workspace.id.is_std());
     }
 
     pub fn next_library_workspace_id(&self) -> u32 {
         let used: HashSet<u32> = self.workspaces.iter().map(|w| w.id.id).collect();
-        let mut candidate = 2;
+        let mut candidate = WorkspaceId::LIBRARY_START.id;
         while used.contains(&candidate) {
             candidate += 1;
         }

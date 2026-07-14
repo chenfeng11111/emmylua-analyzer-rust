@@ -6,7 +6,7 @@ mod test {
     fn test_issue_276() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
                 --- @param a string
@@ -25,7 +25,7 @@ mod test {
     fn test_issue_249() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
             ---@param path string
@@ -42,10 +42,66 @@ mod test {
     }
 
     #[test]
+    fn test_overload_param_count_gap_reports_missing_parameter() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@class Callable
+                ---@overload fun(a: string)
+                ---@overload fun(a: string, b: string, c: string)
+                ---@type Callable
+                local callable
+
+                callable("a", "b")
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_generic_required_param_reports_missing_parameter() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@generic T
+                ---@param v T
+                ---@return T
+                local function getBox(v)
+                    return v
+                end
+
+                getBox()
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_generic_return_does_not_make_unknown_param_required() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@generic T
+                ---@param v unknown
+                ---@return T
+                local function getBox(v)
+                    return v
+                end
+
+                getBox()
+        "#
+        ));
+    }
+
+    #[test]
     fn test_1() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
             ---@class A
@@ -64,7 +120,7 @@ mod test {
     fn test_issue_98() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
         ---@param callback fun(i?: integer)
@@ -80,7 +136,7 @@ mod test {
     fn test_multi_return() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
             ---@param a number
@@ -100,7 +156,7 @@ mod test {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
             ---@param a number
@@ -124,7 +180,7 @@ mod test {
     fn test_table_unpack() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
             local table = {}
@@ -151,7 +207,7 @@ mod test {
     #[test]
     fn test_alias() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::MissingParameter,
             r#"
             ---@alias Serialization.SupportTypes
@@ -169,7 +225,7 @@ mod test {
     #[test]
     fn test_issue_450() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for_namespace(
+        assert!(!ws.has_no_diagnostic_in_namespace(
             DiagnosticCode::MissingParameter,
             r#"
                 ---@class D31.A
@@ -182,7 +238,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for_namespace(
+        assert!(ws.has_no_diagnostic_in_namespace(
             DiagnosticCode::MissingParameter,
             r#"
                 ---@class D31.A
@@ -219,10 +275,94 @@ mod test {
         "#,
         );
 
-        assert!(ws.check_code_for_namespace(
+        assert!(ws.has_no_diagnostic_in_namespace(
             DiagnosticCode::MissingParameter,
             r#"
             test(1, getNumbers())
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_call_operator_implicit_self() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@class Task
+                local Task = {}
+
+                ---@param callback fun()
+                function Task:await(callback)
+                end
+
+                ---@class TaskFun
+                ---@operator call: Task
+
+                ---@type TaskFun[]
+                local tasks = {}
+
+                tasks[1]():await(function()
+                end)
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_call_overload_named_self_is_not_stripped() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@class Callable
+                ---@overload fun(self: string)
+                ---@type Callable
+                local c
+
+                c()
+        "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@class Callable
+                ---@overload fun(self: string)
+                ---@type Callable
+                local c
+
+                c("x")
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_call_overload_self_type_is_not_stripped() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@class Callable
+                ---@overload fun(self: self)
+                ---@type Callable
+                local c
+
+                c()
+        "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::MissingParameter,
+            r#"
+                ---@class Callable
+                ---@overload fun(self: self)
+                ---@type Callable
+                local c
+
+                c(c)
         "#
         ));
     }

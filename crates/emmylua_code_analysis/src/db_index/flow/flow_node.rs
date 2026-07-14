@@ -1,6 +1,6 @@
 use emmylua_parser::{
-    LuaAssignStat, LuaAstNode, LuaAstPtr, LuaChunk, LuaClosureExpr, LuaDocTagCast, LuaExpr,
-    LuaForStat, LuaFuncStat, LuaSyntaxKind, LuaSyntaxNode,
+    LuaAssignStat, LuaAstNode, LuaAstPtr, LuaCallExprStat, LuaChunk, LuaClosureExpr, LuaDocTagCast,
+    LuaExpr, LuaForStat, LuaFuncStat, LuaSyntaxKind, LuaSyntaxNode,
 };
 use internment::ArcIntern;
 use rowan::{TextRange, TextSize};
@@ -44,6 +44,8 @@ pub enum FlowNodeKind {
     DeclPosition(TextSize),
     /// Variable assignment
     Assignment(LuaAstPtr<LuaAssignStat>),
+    /// Call expression statement
+    CallExprStat(LuaAstPtr<LuaCallExprStat>),
     /// Conditional flow (type guards, existence checks)
     TrueCondition(LuaAstPtr<LuaExpr>),
     /// Conditional flow (type guards, existence checks)
@@ -56,6 +58,8 @@ pub enum FlowNodeKind {
     TagCast(LuaAstPtr<LuaDocTagCast>),
     /// Break statement
     Break,
+    /// Continue statement
+    Continue,
     /// Return statement
     Return,
 }
@@ -75,7 +79,10 @@ impl FlowNodeKind {
     }
 
     pub fn is_change_flow(&self) -> bool {
-        matches!(self, FlowNodeKind::Break | FlowNodeKind::Return)
+        matches!(
+            self,
+            FlowNodeKind::Break | FlowNodeKind::Return | FlowNodeKind::Continue
+        )
     }
 
     pub fn is_assignment(&self) -> bool {

@@ -1,3 +1,4 @@
+mod basic_union;
 mod generic_param;
 mod humanize_type;
 mod test;
@@ -8,12 +9,16 @@ mod type_visit_trait;
 mod types;
 
 use super::traits::LuaIndex;
-use crate::{DbIndex, FileId, InFiled, db_index::r#type::type_decl::LuaTypeIdentifier};
+use crate::{DbIndex, FileId, InFiled, db_index::WorkspaceId};
+pub use basic_union::{BasicTypeKind, BasicTypeUnion};
 pub use generic_param::GenericParam;
-pub use humanize_type::{RenderLevel, format_union_type, humanize_type};
-use std::collections::{HashMap, HashSet};
-pub use type_decl::{LuaDeclLocation, LuaDeclTypeKind, LuaTypeDecl, LuaTypeDeclId, LuaTypeFlag};
+use hashbrown::{HashMap, HashSet};
+pub use humanize_type::{RenderLevel, TypeHumanizer, format_union_type, humanize_type};
+pub use type_decl::{
+    LuaDeclLocation, LuaDeclTypeKind, LuaTypeDecl, LuaTypeDeclId, LuaTypeFlag, LuaTypeIdentifier,
+};
 pub use type_ops::TypeOps;
+pub(crate) use type_ops::union_type_shallow;
 pub use type_owner::{LuaTypeCache, LuaTypeOwner};
 pub use type_visit_trait::TypeVisitTrait;
 pub use types::*;
@@ -28,6 +33,10 @@ pub struct LuaTypeIndex {
     supers: HashMap<LuaTypeDeclId, Vec<InFiled<LuaType>>>,
     types: HashMap<LuaTypeOwner, LuaTypeCache>,
     in_filed_type_owner: HashMap<FileId, HashSet<LuaTypeOwner>>,
+    // type name index
+    global_name_type_map: HashMap<String, LuaTypeDeclId>,
+    internal_name_type_map: HashMap<WorkspaceId, HashMap<String, LuaTypeDeclId>>,
+    local_name_type_map: HashMap<FileId, HashMap<String, LuaTypeDeclId>>,
 }
 
 impl Default for LuaTypeIndex {
@@ -47,6 +56,9 @@ impl LuaTypeIndex {
             supers: HashMap::new(),
             types: HashMap::new(),
             in_filed_type_owner: HashMap::new(),
+            global_name_type_map: HashMap::new(),
+            internal_name_type_map: HashMap::new(),
+            local_name_type_map: HashMap::new(),
         }
     }
 
@@ -72,6 +84,7 @@ impl LuaTypeIndex {
     /// return previous FileId if exist
     pub fn add_type_decl(&mut self, file_id: FileId, type_decl: LuaTypeDecl) {
         let id = type_decl.get_id();
+        self.index_type_decl_name(&id);
         self.file_types.entry(file_id).or_default().push(id.clone());
 
         if let Some(old_decl) = self.full_name_type_map.get_mut(&id) {
@@ -81,95 +94,223 @@ impl LuaTypeIndex {
         }
     }
 
-    pub fn find_type_decl(&self, file_id: FileId, name: &str) -> Option<&LuaTypeDecl> {
+    fn index_type_decl_name(&mut self, decl_id: &LuaTypeDeclId) {
+        match decl_id.get_id() {
+            LuaTypeIdentifier::Global(name) => {
+                self.global_name_type_map
+                    .entry(name.to_string())
+                    .or_insert_with(|| decl_id.clone());
+            }
+            LuaTypeIdentifier::Internal(workspace_id, name) => {
+                self.internal_name_type_map
+                    .entry(*workspace_id)
+                    .or_default()
+                    .entry(name.to_string())
+                    .or_insert_with(|| decl_id.clone());
+            }
+            LuaTypeIdentifier::File(file_id, name) => {
+                self.local_name_type_map
+                    .entry(*file_id)
+                    .or_default()
+                    .entry(name.to_string())
+                    .or_insert_with(|| decl_id.clone());
+            }
+        }
+    }
+
+    fn remove_type_decl_name(&mut self, decl_id: &LuaTypeDeclId) {
+        match decl_id.get_id() {
+            LuaTypeIdentifier::Global(name) => {
+                self.global_name_type_map.remove(name.as_str());
+            }
+            LuaTypeIdentifier::Internal(workspace_id, name) => {
+                let should_remove_workspace =
+                    if let Some(type_names) = self.internal_name_type_map.get_mut(workspace_id) {
+                        type_names.remove(name.as_str());
+                        type_names.is_empty()
+                    } else {
+                        false
+                    };
+                if should_remove_workspace {
+                    self.internal_name_type_map.remove(workspace_id);
+                }
+            }
+            LuaTypeIdentifier::File(file_id, name) => {
+                let should_remove_file =
+                    if let Some(type_names) = self.local_name_type_map.get_mut(file_id) {
+                        type_names.remove(name.as_str());
+                        type_names.is_empty()
+                    } else {
+                        false
+                    };
+                if should_remove_file {
+                    self.local_name_type_map.remove(file_id);
+                }
+            }
+        }
+    }
+
+    fn build_qualified_name(qualified_name: &mut String, namespace: &str, name: &str) {
+        qualified_name.clear();
+        qualified_name.push_str(namespace);
+        qualified_name.push('.');
+        qualified_name.push_str(name);
+    }
+
+    pub fn find_type_decl(
+        &self,
+        file_id: FileId,
+        name: &str,
+        workspace_id: Option<WorkspaceId>,
+    ) -> Option<&LuaTypeDecl> {
+        let mut qualified_name = String::new();
         if let Some(ns) = self.get_file_namespace(&file_id) {
-            let full_name = LuaTypeDeclId::global(&format!("{}.{}", ns, name));
-            if let Some(decl) = self.full_name_type_map.get(&full_name) {
+            Self::build_qualified_name(&mut qualified_name, ns, name);
+            if let Some(decl) =
+                self.find_scoped_type_decl_by_name(file_id, workspace_id, &qualified_name, false)
+            {
                 return Some(decl);
             }
         }
         if let Some(usings) = self.get_file_using_namespace(&file_id) {
             for ns in usings {
-                let full_name = LuaTypeDeclId::global(&format!("{}.{}", ns, name));
-                if let Some(decl) = self.full_name_type_map.get(&full_name) {
+                Self::build_qualified_name(&mut qualified_name, ns, name);
+                if let Some(decl) = self.find_scoped_type_decl_by_name(
+                    file_id,
+                    workspace_id,
+                    &qualified_name,
+                    false,
+                ) {
                     return Some(decl);
                 }
             }
         }
 
-        let local_id = LuaTypeDeclId::local(file_id, name);
-        if let Some(decl) = self.full_name_type_map.get(&local_id) {
-            return Some(decl);
-        }
-
-        let global_id = LuaTypeDeclId::global(name);
-        self.full_name_type_map.get(&global_id)
+        self.find_scoped_type_decl_by_name(file_id, workspace_id, name, true)
     }
 
+    /// 查找当前作用域下 `prefix` 下一层可见的类型项.
+    ///
+    /// 注意, 这里返回的不是“所有完整名称以 `prefix` 开头的类型”.
+    /// 返回值会按下一层名称折叠:
+    /// - `Some(LuaTypeDeclId)` 表示该名称已经落到具体类型节点.
+    /// - `None` 表示该名称只是中间 namespace 节点, 下面仍有更深层的类型.
+    ///
+    /// 例如存在 `pkg.Bar` 与 `pkg.nested.Inner` 时:
+    /// - 查询 `""` 会得到 `pkg -> None`
+    /// - 查询 `"pkg."` 会得到 `Bar -> Some(...)` 与 `nested -> None`
     pub fn find_type_decls(
         &self,
         file_id: FileId,
         prefix: &str,
+        workspace_id: Option<WorkspaceId>,
     ) -> HashMap<String, Option<LuaTypeDeclId>> {
-        let mut result = HashMap::new();
-        let all_type_ids = self.full_name_type_map.keys().collect::<Vec<_>>();
-        if let Some(ns) = self.get_file_namespace(&file_id) {
-            let prefix = &format!("{}.{}", ns, prefix);
-            for id in all_type_ids.clone() {
-                let id_name = id.get_name();
+        let mut prefixes = Vec::new();
+        let mut qualified_prefix = String::new();
 
-                if let Some(rest_name) = id_name.strip_prefix(prefix) {
-                    if let Some(i) = rest_name.find('.') {
-                        let name = rest_name[..i].to_string();
-                        result.entry(name).or_insert(None);
-                    } else {
-                        result.insert(rest_name.to_string(), Some(id.clone()));
-                    }
-                }
+        let mut push_unique_prefix = |candidate: &str| {
+            if prefixes.iter().any(|prefix| prefix == candidate) {
+                return;
             }
+            prefixes.push(candidate.to_string());
+        };
+
+        if let Some(ns) = self.get_file_namespace(&file_id) {
+            Self::build_qualified_name(&mut qualified_prefix, ns, prefix);
+            push_unique_prefix(&qualified_prefix);
         }
 
         if let Some(usings) = self.get_file_using_namespace(&file_id) {
             for ns in usings {
-                let prefix = &format!("{}.{}", ns, prefix);
-                for id in all_type_ids.clone() {
-                    let id_name = id.get_name();
-
-                    if let Some(rest_name) = id_name.strip_prefix(prefix) {
-                        if let Some(i) = rest_name.find('.') {
-                            let name = rest_name[..i].to_string();
-                            result.entry(name).or_insert(None);
-                        } else {
-                            result.insert(rest_name.to_string(), Some(id.clone()));
-                        }
-                    }
-                }
+                Self::build_qualified_name(&mut qualified_prefix, ns, prefix);
+                push_unique_prefix(&qualified_prefix);
             }
         }
 
-        for id in all_type_ids {
+        push_unique_prefix(prefix);
+
+        let mut prefix_results = Vec::with_capacity(prefixes.len());
+        for _ in 0..prefixes.len() {
+            prefix_results.push(HashMap::new());
+        }
+
+        for id in self.full_name_type_map.keys() {
             let id_name = match id.get_id() {
-                LuaTypeIdentifier::Local(f_id, name) => {
-                    if f_id != &file_id {
+                LuaTypeIdentifier::Global(name) => name.as_str(),
+                LuaTypeIdentifier::Internal(owner_workspace_id, name) => {
+                    if workspace_id == Some(*owner_workspace_id) {
+                        name.as_str()
+                    } else {
                         continue;
                     }
-                    name
                 }
-                LuaTypeIdentifier::Global(name) => name,
+                LuaTypeIdentifier::File(owner_file_id, name) => {
+                    if *owner_file_id == file_id {
+                        name.as_str()
+                    } else {
+                        continue;
+                    }
+                }
             };
-            if id_name.starts_with(prefix)
-                && let Some(rest_name) = id_name.strip_prefix(prefix)
-            {
-                if let Some(i) = rest_name.find('.') {
-                    let name = rest_name[..i].to_string();
-                    result.entry(name).or_insert(None);
-                } else {
-                    result.insert(rest_name.to_string(), Some(id.clone()));
+
+            for (idx, prefix) in prefixes.iter().enumerate() {
+                if let Some(rest_name) = id_name.strip_prefix(prefix) {
+                    if let Some(i) = rest_name.find('.') {
+                        let name = rest_name[..i].to_string();
+                        // 仍然存在更深层路径时只暴露当前层级名称, 并标记为 namespace 节点
+                        prefix_results[idx].entry(name).or_insert(None);
+                    } else {
+                        prefix_results[idx].insert(rest_name.to_string(), Some(id.clone()));
+                    }
                 }
             }
         }
 
+        let mut result = HashMap::new();
+        for prefix_result in prefix_results {
+            for (name, decl_id) in prefix_result {
+                if let Some(decl_id) = decl_id {
+                    result.insert(name, Some(decl_id));
+                } else {
+                    result.entry(name).or_insert(None);
+                }
+            }
+        }
         result
+    }
+
+    fn find_scoped_type_decl_by_name(
+        &self,
+        file_id: FileId,
+        workspace_id: Option<WorkspaceId>,
+        name: &str,
+        allow_local: bool,
+    ) -> Option<&LuaTypeDecl> {
+        if allow_local {
+            if let Some(decl) = self
+                .local_name_type_map
+                .get(&file_id)
+                .and_then(|type_names| type_names.get(name))
+                .and_then(|decl_id| self.full_name_type_map.get(decl_id))
+            {
+                return Some(decl);
+            }
+        }
+
+        if let Some(workspace_id) = workspace_id {
+            if let Some(decl) = self
+                .internal_name_type_map
+                .get(&workspace_id)
+                .and_then(|type_names| type_names.get(name))
+                .and_then(|decl_id| self.full_name_type_map.get(decl_id))
+            {
+                return Some(decl);
+            }
+        }
+
+        self.global_name_type_map
+            .get(name)
+            .and_then(|decl_id| self.full_name_type_map.get(decl_id))
     }
 
     pub fn add_generic_params(&mut self, decl_id: LuaTypeDeclId, params: Vec<GenericParam>) {
@@ -188,18 +329,64 @@ impl LuaTypeIndex {
     }
 
     pub fn get_super_types(&self, decl_id: &LuaTypeDeclId) -> Option<Vec<LuaType>> {
+        self.get_super_types_iter(decl_id)
+            .map(|supers| supers.cloned().collect())
+    }
+
+    pub fn get_super_types_raw(&self, decl_id: &LuaTypeDeclId) -> Option<Vec<LuaType>> {
         self.supers
             .get(decl_id)
             .map(|supers| supers.iter().map(|s| s.value.clone()).collect())
     }
 
-    pub fn get_super_types_iter(
+    pub fn get_super_types_iter<'a>(
+        &'a self,
+        decl_id: &'a LuaTypeDeclId,
+    ) -> Option<impl Iterator<Item = &'a LuaType> + 'a> {
+        self.supers.get(decl_id).map(move |supers| {
+            let mut visited = HashSet::new();
+            supers.iter().map(|s| &s.value).filter(move |super_type| {
+                visited.clear();
+                !self.is_cyclic_super_edge(decl_id, super_type, &mut visited)
+            })
+        })
+    }
+
+    fn is_cyclic_super_edge(
         &self,
         decl_id: &LuaTypeDeclId,
-    ) -> Option<impl Iterator<Item = &LuaType> + '_> {
-        self.supers
-            .get(decl_id)
-            .map(|supers| supers.iter().map(|s| &s.value))
+        super_type: &LuaType,
+        visited: &mut HashSet<LuaTypeDeclId>,
+    ) -> bool {
+        let Some(super_id) = super_type_base_decl_id(super_type) else {
+            return false;
+        };
+
+        self.super_reaches(super_id, decl_id, visited)
+    }
+
+    fn super_reaches(
+        &self,
+        current_id: &LuaTypeDeclId,
+        target_id: &LuaTypeDeclId,
+        visited: &mut HashSet<LuaTypeDeclId>,
+    ) -> bool {
+        if current_id == target_id {
+            return true;
+        }
+
+        if !visited.insert(current_id.clone()) {
+            return false;
+        }
+
+        let Some(supers) = self.supers.get(current_id) else {
+            return false;
+        };
+
+        supers
+            .iter()
+            .filter_map(|super_type| super_type_base_decl_id(&super_type.value))
+            .any(|super_id| self.super_reaches(super_id, target_id, visited))
     }
 
     /// Get all direct subclasses of a given type
@@ -256,6 +443,56 @@ impl LuaTypeIndex {
         self.full_name_type_map.get(decl_id)
     }
 
+    pub fn get_file_type_decls(&self, file_id: FileId) -> Vec<&LuaTypeDecl> {
+        let mut seen = HashSet::new();
+        self.file_types
+            .get(&file_id)
+            .into_iter()
+            .flatten()
+            .filter(|decl_id| seen.insert((*decl_id).clone()))
+            .filter_map(|decl_id| self.full_name_type_map.get(decl_id))
+            .collect()
+    }
+
+    pub fn get_visible_type_decls_by_full_name(
+        &self,
+        file_id: FileId,
+        full_name: &str,
+        workspace_id: Option<WorkspaceId>,
+    ) -> Vec<&LuaTypeDecl> {
+        let mut decls = Vec::with_capacity(3);
+
+        if let Some(decl) = self
+            .local_name_type_map
+            .get(&file_id)
+            .and_then(|type_names| type_names.get(full_name))
+            .and_then(|decl_id| self.full_name_type_map.get(decl_id))
+        {
+            decls.push(decl);
+        }
+
+        if let Some(workspace_id) = workspace_id {
+            if let Some(decl) = self
+                .internal_name_type_map
+                .get(&workspace_id)
+                .and_then(|type_names| type_names.get(full_name))
+                .and_then(|decl_id| self.full_name_type_map.get(decl_id))
+            {
+                decls.push(decl);
+            }
+        }
+
+        if let Some(decl) = self
+            .global_name_type_map
+            .get(full_name)
+            .and_then(|decl_id| self.full_name_type_map.get(decl_id))
+        {
+            decls.push(decl);
+        }
+
+        decls
+    }
+
     pub fn get_all_types(&self) -> Vec<&LuaTypeDecl> {
         self.full_name_type_map.values().collect()
     }
@@ -289,6 +526,14 @@ impl LuaTypeIndex {
     }
 }
 
+pub(crate) fn super_type_base_decl_id(super_type: &LuaType) -> Option<&LuaTypeDeclId> {
+    match super_type {
+        LuaType::Ref(id) => Some(id),
+        LuaType::Generic(generic) => Some(generic.get_base_type_id_ref()),
+        _ => None,
+    }
+}
+
 impl LuaIndex for LuaTypeIndex {
     fn remove(&mut self, file_id: FileId) {
         self.file_namespace.remove(&file_id);
@@ -313,6 +558,7 @@ impl LuaIndex for LuaTypeIndex {
                 }
 
                 if remove_type {
+                    self.remove_type_decl_name(&id);
                     self.generic_params.remove(&id);
                 }
             }
@@ -334,6 +580,9 @@ impl LuaIndex for LuaTypeIndex {
         self.supers.clear();
         self.types.clear();
         self.in_filed_type_owner.clear();
+        self.global_name_type_map.clear();
+        self.internal_name_type_map.clear();
+        self.local_name_type_map.clear();
     }
 }
 
@@ -369,7 +618,7 @@ pub fn first_param_may_not_self(typ: &LuaType) -> bool {
     if typ.is_table()
         || matches!(
             typ,
-            LuaType::TplRef(_) | LuaType::StrTplRef(_) | LuaType::Any
+            LuaType::TplRef(_) | LuaType::StrTplRef(_) | LuaType::Any | LuaType::Unknown
         )
     {
         return true;

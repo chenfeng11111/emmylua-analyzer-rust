@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use super::lua_member_feature::LuaMemberFeature;
-use crate::{DbIndex, FileId, GlobalId, InferFailReason, LuaInferCache, LuaType, infer_expr};
+use crate::{
+    DbIndex, FileId, GlobalId, InferFailReason, LuaInferCache, LuaType,
+    semantic::try_infer_expr_for_index,
+};
 
 #[derive(Debug)]
 pub struct LuaMember {
@@ -95,7 +98,7 @@ pub enum LuaMemberKey {
     None,
     Integer(i64),
     Name(SmolStr),
-    ExprType(LuaType),
+    TypeKey(LuaType),
 }
 
 impl LuaMemberKey {
@@ -116,13 +119,15 @@ impl LuaMemberKey {
             }
             LuaIndexKey::Idx(idx) => Ok(LuaMemberKey::Integer(*idx as i64)),
             LuaIndexKey::Expr(expr) => {
-                let expr_type = infer_expr(db, cache, expr.clone())?;
-                match expr_type {
+                let Some(typ) = try_infer_expr_for_index(db, cache, expr.clone())? else {
+                    return Err(InferFailReason::None);
+                };
+                match typ {
                     LuaType::StringConst(s) => Ok(LuaMemberKey::Name(s.deref().clone())),
                     LuaType::DocStringConst(s) => Ok(LuaMemberKey::Name(s.deref().clone())),
                     LuaType::IntegerConst(i) => Ok(LuaMemberKey::Integer(i)),
                     LuaType::DocIntegerConst(i) => Ok(LuaMemberKey::Integer(i)),
-                    _ => Ok(LuaMemberKey::ExprType(expr_type)),
+                    _ => Ok(LuaMemberKey::TypeKey(typ)),
                 }
             }
         }
@@ -141,7 +146,7 @@ impl LuaMemberKey {
     }
 
     pub fn is_expr(&self) -> bool {
-        matches!(self, LuaMemberKey::ExprType(_))
+        matches!(self, LuaMemberKey::TypeKey(_))
     }
 
     pub fn get_name(&self) -> Option<&str> {
@@ -158,6 +163,15 @@ impl LuaMemberKey {
         }
     }
 
+    pub fn to_index_type(&self) -> Option<LuaType> {
+        match self {
+            LuaMemberKey::Integer(i) => Some(LuaType::IntegerConst(*i)),
+            LuaMemberKey::Name(name) => Some(LuaType::StringConst(name.clone().into())),
+            LuaMemberKey::TypeKey(typ) => Some(typ.clone()),
+            LuaMemberKey::None => None,
+        }
+    }
+
     pub fn to_path(&self) -> String {
         match self {
             LuaMemberKey::Name(name) => name.to_string(),
@@ -165,7 +179,7 @@ impl LuaMemberKey {
                 format!("[{}]", i)
             }
             LuaMemberKey::None => "".to_string(),
-            LuaMemberKey::ExprType(_) => "".to_string(),
+            LuaMemberKey::TypeKey(_) => "".to_string(),
         }
     }
 }
@@ -189,7 +203,7 @@ impl Ord for LuaMemberKey {
             (Name(a), Name(b)) => a.cmp(b),
             (Name(_), _) => std::cmp::Ordering::Less,
             (_, Name(_)) => std::cmp::Ordering::Greater,
-            (ExprType(_), ExprType(_)) => std::cmp::Ordering::Equal,
+            (TypeKey(_), TypeKey(_)) => std::cmp::Ordering::Equal,
         }
     }
 }

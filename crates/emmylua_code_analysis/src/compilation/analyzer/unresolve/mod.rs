@@ -3,17 +3,21 @@ mod find_decl_function;
 mod resolve;
 mod resolve_closure;
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::{
     FileId, InferFailReason, LuaMemberFeature, LuaSemanticDeclId,
-    compilation::analyzer::{AnalysisPipeline, unresolve::resolve::try_resolve_constructor},
+    compilation::analyzer::{
+        AnalysisPipeline,
+        unresolve::resolve::{try_resolve_call, try_resolve_class_constructor},
+    },
     db_index::{DbIndex, LuaDeclId, LuaMemberId, LuaSignatureId},
     profile::Profile,
 };
 use check_reason::{check_reach_reason, resolve_all_reason};
 use emmylua_parser::{
-    LuaAssignStat, LuaCallExpr, LuaExpr, LuaFuncStat, LuaNameToken, LuaTableExpr, LuaTableField,
+    LuaAssignStat, LuaBlock, LuaCallExpr, LuaExpr, LuaFuncStat, LuaNameToken, LuaTableExpr,
+    LuaTableField,
 };
 use resolve::{
     try_resolve_decl, try_resolve_iter_var, try_resolve_member, try_resolve_module,
@@ -23,7 +27,7 @@ use resolve_closure::{
     try_resolve_call_closure_params, try_resolve_closure_parent_params, try_resolve_closure_return,
 };
 
-use super::{AnalyzeContext, infer_cache_manager::InferCacheManager, lua::LuaReturnPoint};
+use super::{AnalyzeContext, infer_cache_manager::InferCacheManager};
 
 type ResolveResult = Result<(), InferFailReason>;
 
@@ -201,8 +205,11 @@ fn try_resolve(
                     UnResolve::TableField(un_resolve_table_field) => {
                         try_resolve_table_field(db, cache, un_resolve_table_field)
                     }
-                    UnResolve::ClassCtor(un_resolve_constructor) => {
-                        try_resolve_constructor(db, cache, un_resolve_constructor)
+                    UnResolve::ClassConstructor(un_resolve_constructor) => {
+                        try_resolve_class_constructor(db, cache, un_resolve_constructor)
+                    }
+                    UnResolve::Call(un_resolve_call) => {
+                        try_resolve_call(db, cache, un_resolve_call)
                     }
                 };
 
@@ -263,7 +270,8 @@ pub enum UnResolve {
     ClosureParentParams(Box<UnResolveParentClosureParams>),
     ModuleRef(Box<UnResolveModuleRef>),
     TableField(Box<UnResolveTableField>),
-    ClassCtor(Box<UnResolveConstructor>),
+    ClassConstructor(Box<UnResolveConstructor>),
+    Call(Box<UnResolveCall>),
 }
 
 #[allow(dead_code)]
@@ -286,7 +294,12 @@ impl UnResolve {
             }
             UnResolve::TableField(un_resolve_table_field) => Some(un_resolve_table_field.file_id),
             UnResolve::ModuleRef(_) => None,
-            UnResolve::ClassCtor(un_resolve_constructor) => Some(un_resolve_constructor.file_id),
+            UnResolve::Call(un_resolve_constructor_check) => {
+                Some(un_resolve_constructor_check.file_id)
+            }
+            UnResolve::ClassConstructor(un_resolve_constructor) => {
+                Some(un_resolve_constructor.file_id)
+            }
         }
     }
 }
@@ -336,7 +349,7 @@ impl From<UnResolveModule> for UnResolve {
 pub struct UnResolveReturn {
     pub file_id: FileId,
     pub signature_id: LuaSignatureId,
-    pub return_points: Vec<LuaReturnPoint>,
+    pub body: LuaBlock,
 }
 
 impl From<UnResolveReturn> for UnResolve {
@@ -378,7 +391,7 @@ pub struct UnResolveClosureReturn {
     pub signature_id: LuaSignatureId,
     pub call_expr: LuaCallExpr,
     pub param_idx: usize,
-    pub return_points: Vec<LuaReturnPoint>,
+    pub body: LuaBlock,
 }
 
 impl From<UnResolveClosureReturn> for UnResolve {
@@ -444,6 +457,18 @@ pub struct UnResolveConstructor {
 
 impl From<UnResolveConstructor> for UnResolve {
     fn from(un_resolve_constructor: UnResolveConstructor) -> Self {
-        UnResolve::ClassCtor(Box::new(un_resolve_constructor))
+        UnResolve::ClassConstructor(Box::new(un_resolve_constructor))
+    }
+}
+
+#[derive(Debug)]
+pub struct UnResolveCall {
+    pub file_id: FileId,
+    pub call_expr: LuaCallExpr,
+}
+
+impl From<UnResolveCall> for UnResolve {
+    fn from(un_resolve_call: UnResolveCall) -> Self {
+        UnResolve::Call(Box::new(un_resolve_call))
     }
 }

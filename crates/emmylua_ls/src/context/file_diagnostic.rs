@@ -86,7 +86,7 @@ impl FileDiagnostic {
     }
 
     /// 清除指定文件的诊断信息
-    pub fn clear_push_file_diagnostics(&self, uri: lsp_types::Uri) {
+    pub fn clear_push_file_diagnostics(&self, uri: Uri) {
         let diagnostic_param = lsp_types::PublishDiagnosticsParams {
             uri,
             diagnostics: vec![],
@@ -124,7 +124,7 @@ impl FileDiagnostic {
     #[allow(unused)]
     pub async fn cancel_all(&self) {
         let mut tokens = self.diagnostic_tokens.lock().await;
-        for (_, token) in tokens.iter() {
+        for token in tokens.values() {
             token.cancel();
         }
         tokens.clear();

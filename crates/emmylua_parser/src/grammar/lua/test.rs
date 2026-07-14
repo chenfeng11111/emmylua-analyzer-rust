@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::{LuaLanguageLevel, LuaParser, parser::ParserConfig};
+    use crate::{LuaAstNode, LuaIndexExpr, LuaLanguageLevel, LuaParser, parser::ParserConfig};
 
     macro_rules! assert_ast_eq {
         ($lua_code:expr, $expected:expr) => {
@@ -1136,6 +1136,41 @@ Syntax(Chunk)@0..4
     }
 
     #[test]
+    fn test_colon_completion_before_expression_boundaries() {
+        let cases = [
+            ("do a(): end", "before end"),
+            ("if true then a(): else end", "before else"),
+            ("if true then a(): elseif false then end", "before elseif"),
+            ("repeat a(): until true", "before until"),
+            ("if a(): then end", "before then"),
+            ("while a(): do end", "before while do"),
+            ("for i = a():, 10 do end", "before numeric for comma"),
+            ("for i = 1, a(): do end", "before numeric for do"),
+            ("for _, v in a(): do end", "before generic for do"),
+            ("local x = (a():)", "before right paren"),
+            ("local x = { a(): }", "before right brace"),
+            ("local x = t[a():]", "before right bracket"),
+        ];
+
+        for (code, name) in cases {
+            let tree = LuaParser::parse(code, ParserConfig::default());
+            let chunk = tree.get_chunk_node();
+            let has_unfinished_colon_index = chunk.descendants::<LuaIndexExpr>().any(|index| {
+                let end = u32::from(index.syntax().text_range().end()) as usize;
+                index
+                    .get_index_token()
+                    .is_some_and(|token| token.is_colon())
+                    && code.as_bytes().get(end.saturating_sub(1)) == Some(&b':')
+            });
+            assert!(
+                has_unfinished_colon_index,
+                "missing unfinished colon index {name}: {:#?}",
+                tree.get_red_root()
+            );
+        }
+    }
+
+    #[test]
     fn test_lua55_global_grammar() {
         let code = "global a, b;";
         let result = r#"
@@ -1187,6 +1222,476 @@ Syntax(Chunk)@0..26
             code2,
             result2,
             ParserConfig::with_level(LuaLanguageLevel::Lua55)
+        );
+    }
+
+    #[test]
+    fn test_ternary_inside_paren() {
+        let code = "local d = (i % 2 == 0 ? i : -i)\n";
+        let result = r#"
+Syntax(Chunk)@0..32
+  Syntax(Block)@0..32
+    Syntax(LocalStat)@0..31
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "d"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(ParenExpr)@10..31
+        Token(TkLeftParen)@10..11 "("
+        Syntax(TernaryExpr)@11..30
+          Syntax(BinaryExpr)@11..21
+            Syntax(BinaryExpr)@11..16
+              Syntax(NameExpr)@11..12
+                Token(TkName)@11..12 "i"
+              Token(TkWhitespace)@12..13 " "
+              Token(TkMod)@13..14 "%"
+              Token(TkWhitespace)@14..15 " "
+              Syntax(LiteralExpr)@15..16
+                Token(TkInt)@15..16 "2"
+            Token(TkWhitespace)@16..17 " "
+            Token(TkEq)@17..19 "=="
+            Token(TkWhitespace)@19..20 " "
+            Syntax(LiteralExpr)@20..21
+              Token(TkInt)@20..21 "0"
+          Token(TkWhitespace)@21..22 " "
+          Token(TkTernary)@22..23 "?"
+          Token(TkWhitespace)@23..24 " "
+          Syntax(NameExpr)@24..25
+            Token(TkName)@24..25 "i"
+          Token(TkWhitespace)@25..26 " "
+          Token(TkColon)@26..27 ":"
+          Token(TkWhitespace)@27..28 " "
+          Syntax(UnaryExpr)@28..30
+            Token(TkMinus)@28..29 "-"
+            Syntax(NameExpr)@29..30
+              Token(TkName)@29..30 "i"
+        Token(TkRightParen)@30..31 ")"
+    Token(TkEndOfLine)@31..32 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_ternary_expr() {
+        let code = "local x = a ? b : c\n";
+        let result = r#"
+Syntax(Chunk)@0..20
+  Syntax(Block)@0..20
+    Syntax(LocalStat)@0..19
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(TernaryExpr)@10..19
+        Syntax(NameExpr)@10..11
+          Token(TkName)@10..11 "a"
+        Token(TkWhitespace)@11..12 " "
+        Token(TkTernary)@12..13 "?"
+        Token(TkWhitespace)@13..14 " "
+        Syntax(NameExpr)@14..15
+          Token(TkName)@14..15 "b"
+        Token(TkWhitespace)@15..16 " "
+        Token(TkColon)@16..17 ":"
+        Token(TkWhitespace)@17..18 " "
+        Syntax(NameExpr)@18..19
+          Token(TkName)@18..19 "c"
+    Token(TkEndOfLine)@19..20 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_ternary_right_assoc() {
+        let code = "local x = a ? b ? c : d : e\n";
+        let result = r#"
+Syntax(Chunk)@0..28
+  Syntax(Block)@0..28
+    Syntax(LocalStat)@0..27
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(TernaryExpr)@10..27
+        Syntax(NameExpr)@10..11
+          Token(TkName)@10..11 "a"
+        Token(TkWhitespace)@11..12 " "
+        Token(TkTernary)@12..13 "?"
+        Token(TkWhitespace)@13..14 " "
+        Syntax(TernaryExpr)@14..23
+          Syntax(NameExpr)@14..15
+            Token(TkName)@14..15 "b"
+          Token(TkWhitespace)@15..16 " "
+          Token(TkTernary)@16..17 "?"
+          Token(TkWhitespace)@17..18 " "
+          Syntax(NameExpr)@18..19
+            Token(TkName)@18..19 "c"
+          Token(TkWhitespace)@19..20 " "
+          Token(TkColon)@20..21 ":"
+          Token(TkWhitespace)@21..22 " "
+          Syntax(NameExpr)@22..23
+            Token(TkName)@22..23 "d"
+        Token(TkWhitespace)@23..24 " "
+        Token(TkColon)@24..25 ":"
+        Token(TkWhitespace)@25..26 " "
+        Syntax(NameExpr)@26..27
+          Token(TkName)@26..27 "e"
+    Token(TkEndOfLine)@27..28 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_ternary_with_paren_method_call() {
+        let code = "local x = a ? (b:call()) : c\n";
+        let result = r#"
+Syntax(Chunk)@0..29
+  Syntax(Block)@0..29
+    Syntax(LocalStat)@0..28
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(TernaryExpr)@10..28
+        Syntax(NameExpr)@10..11
+          Token(TkName)@10..11 "a"
+        Token(TkWhitespace)@11..12 " "
+        Token(TkTernary)@12..13 "?"
+        Token(TkWhitespace)@13..14 " "
+        Syntax(ParenExpr)@14..24
+          Token(TkLeftParen)@14..15 "("
+          Syntax(CallExpr)@15..23
+            Syntax(IndexExpr)@15..21
+              Syntax(NameExpr)@15..16
+                Token(TkName)@15..16 "b"
+              Token(TkColon)@16..17 ":"
+              Token(TkName)@17..21 "call"
+            Syntax(CallArgList)@21..23
+              Token(TkLeftParen)@21..22 "("
+              Token(TkRightParen)@22..23 ")"
+          Token(TkRightParen)@23..24 ")"
+        Token(TkWhitespace)@24..25 " "
+        Token(TkColon)@25..26 ":"
+        Token(TkWhitespace)@26..27 " "
+        Syntax(NameExpr)@27..28
+          Token(TkName)@27..28 "c"
+    Token(TkEndOfLine)@28..29 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_method_chain_no_ternary() {
+        let code = "local x = a:b():c()\n";
+        let result = r#"
+Syntax(Chunk)@0..20
+  Syntax(Block)@0..20
+    Syntax(LocalStat)@0..19
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(CallExpr)@10..19
+        Syntax(IndexExpr)@10..17
+          Syntax(CallExpr)@10..15
+            Syntax(IndexExpr)@10..13
+              Syntax(NameExpr)@10..11
+                Token(TkName)@10..11 "a"
+              Token(TkColon)@11..12 ":"
+              Token(TkName)@12..13 "b"
+            Syntax(CallArgList)@13..15
+              Token(TkLeftParen)@13..14 "("
+              Token(TkRightParen)@14..15 ")"
+          Token(TkColon)@15..16 ":"
+          Token(TkName)@16..17 "c"
+        Syntax(CallArgList)@17..19
+          Token(TkLeftParen)@17..18 "("
+          Token(TkRightParen)@18..19 ")"
+    Token(TkEndOfLine)@19..20 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_const_stat() {
+        let code = "const x = 1\n";
+        let result = r#"
+Syntax(Chunk)@0..12
+  Syntax(Block)@0..12
+    Syntax(ConstStat)@0..11
+      Token(TkConst)@0..5 "const"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(LiteralExpr)@10..11
+        Token(TkInt)@10..11 "1"
+    Token(TkEndOfLine)@11..12 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_continue_stat() {
+        let code = "while true do continue end\n";
+        let result = r#"
+Syntax(Chunk)@0..27
+  Syntax(Block)@0..27
+    Syntax(WhileStat)@0..26
+      Token(TkWhile)@0..5 "while"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LiteralExpr)@6..10
+        Token(TkTrue)@6..10 "true"
+      Token(TkWhitespace)@10..11 " "
+      Token(TkDo)@11..13 "do"
+      Syntax(Block)@13..23
+        Token(TkWhitespace)@13..14 " "
+        Syntax(ContinueStat)@14..22
+          Token(TkContinue)@14..22 "continue"
+        Token(TkWhitespace)@22..23 " "
+      Token(TkEnd)@23..26 "end"
+    Token(TkEndOfLine)@26..27 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_safe_method_colon() {
+        let code = "local x = a?.field?.:method()\n";
+        let result = r#"
+Syntax(Chunk)@0..30
+  Syntax(Block)@0..30
+    Syntax(LocalStat)@0..29
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(CallExpr)@10..29
+        Syntax(SafeIndexExpr)@10..27
+          Syntax(SafeIndexExpr)@10..18
+            Syntax(NameExpr)@10..11
+              Token(TkName)@10..11 "a"
+            Token(TkSafeNavigation)@11..13 "?."
+            Token(TkName)@13..18 "field"
+          Token(TkSafeNavigation)@18..20 "?."
+          Token(TkColon)@20..21 ":"
+          Token(TkName)@21..27 "method"
+        Syntax(CallArgList)@27..29
+          Token(TkLeftParen)@27..28 "("
+          Token(TkRightParen)@28..29 ")"
+    Token(TkEndOfLine)@29..30 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_safe_navigation_assign() {
+        let code = "obj?.field = 1\n";
+        let result = r#"
+Syntax(Chunk)@0..15
+  Syntax(Block)@0..15
+    Syntax(AssignStat)@0..14
+      Syntax(SafeIndexExpr)@0..10
+        Syntax(NameExpr)@0..3
+          Token(TkName)@0..3 "obj"
+        Token(TkSafeNavigation)@3..5 "?."
+        Token(TkName)@5..10 "field"
+      Token(TkWhitespace)@10..11 " "
+      Token(TkAssign)@11..12 "="
+      Token(TkWhitespace)@12..13 " "
+      Syntax(LiteralExpr)@13..14
+        Token(TkInt)@13..14 "1"
+    Token(TkEndOfLine)@14..15 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_safe_navigation_assign_chain() {
+        let code = "a?.b?.c = 2\n";
+        let result = r#"
+Syntax(Chunk)@0..12
+  Syntax(Block)@0..12
+    Syntax(AssignStat)@0..11
+      Syntax(SafeIndexExpr)@0..7
+        Syntax(SafeIndexExpr)@0..4
+          Syntax(NameExpr)@0..1
+            Token(TkName)@0..1 "a"
+          Token(TkSafeNavigation)@1..3 "?."
+          Token(TkName)@3..4 "b"
+        Token(TkSafeNavigation)@4..6 "?."
+        Token(TkName)@6..7 "c"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(LiteralExpr)@10..11
+        Token(TkInt)@10..11 "2"
+    Token(TkEndOfLine)@11..12 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_safe_navigation_dot() {
+        let code = "local x = obj?.field\n";
+        let result = r#"
+Syntax(Chunk)@0..21
+  Syntax(Block)@0..21
+    Syntax(LocalStat)@0..20
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(SafeIndexExpr)@10..20
+        Syntax(NameExpr)@10..13
+          Token(TkName)@10..13 "obj"
+        Token(TkSafeNavigation)@13..15 "?."
+        Token(TkName)@15..20 "field"
+    Token(TkEndOfLine)@20..21 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_nil_coalescing() {
+        let code = "local x = a ?? b\n";
+        let result = r#"
+Syntax(Chunk)@0..17
+  Syntax(Block)@0..17
+    Syntax(LocalStat)@0..16
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(BinaryExpr)@10..16
+        Syntax(NameExpr)@10..11
+          Token(TkName)@10..11 "a"
+        Token(TkWhitespace)@11..12 " "
+        Token(TkNilCoalescing)@12..14 "??"
+        Token(TkWhitespace)@14..15 " "
+        Syntax(NameExpr)@15..16
+          Token(TkName)@15..16 "b"
+    Token(TkEndOfLine)@16..17 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_safe_method_call() {
+        let code = "local x = a:bbb?.()\n";
+        let result = r#"
+Syntax(Chunk)@0..20
+  Syntax(Block)@0..20
+    Syntax(LocalStat)@0..19
+      Token(TkLocal)@0..5 "local"
+      Token(TkWhitespace)@5..6 " "
+      Syntax(LocalName)@6..7
+        Token(TkName)@6..7 "x"
+      Token(TkWhitespace)@7..8 " "
+      Token(TkAssign)@8..9 "="
+      Token(TkWhitespace)@9..10 " "
+      Syntax(CallExpr)@10..19
+        Syntax(IndexExpr)@10..15
+          Syntax(NameExpr)@10..11
+            Token(TkName)@10..11 "a"
+          Token(TkColon)@11..12 ":"
+          Token(TkName)@12..15 "bbb"
+        Token(TkSafeNavigation)@15..17 "?."
+        Syntax(CallArgList)@17..19
+          Token(TkLeftParen)@17..18 "("
+          Token(TkRightParen)@18..19 ")"
+    Token(TkEndOfLine)@19..20 "\n"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
         );
     }
 
@@ -1358,6 +1863,234 @@ Syntax(Chunk)@0..16
             code,
             result,
             ParserConfig::with_level(LuaLanguageLevel::Lua55)
+        );
+    }
+
+    #[test]
+    fn test_soft_keywords() {
+        let code = "
+const const = {
+    const = function ()
+        for i = 1, 2 do
+            if i == 1 then
+                continue
+            else
+                return i
+            end
+        end
+    end
+}
+
+continue ={
+    const = function (continue)
+        return continue
+    end
+}
+
+const continue = continue.const {
+    const.contiue
+}
+
+print(continue)
+        ";
+        let result = r#"
+Syntax(Chunk)@0..356
+  Syntax(Block)@0..356
+    Token(TkEndOfLine)@0..1 "\n"
+    Syntax(ConstStat)@1..196
+      Token(TkConst)@1..6 "const"
+      Token(TkWhitespace)@6..7 " "
+      Syntax(LocalName)@7..12
+        Token(TkName)@7..12 "const"
+      Token(TkWhitespace)@12..13 " "
+      Token(TkAssign)@13..14 "="
+      Token(TkWhitespace)@14..15 " "
+      Syntax(TableObjectExpr)@15..196
+        Token(TkLeftBrace)@15..16 "{"
+        Token(TkEndOfLine)@16..17 "\n"
+        Token(TkWhitespace)@17..21 "    "
+        Syntax(TableFieldAssign)@21..194
+          Token(TkName)@21..26 "const"
+          Token(TkWhitespace)@26..27 " "
+          Token(TkAssign)@27..28 "="
+          Token(TkWhitespace)@28..29 " "
+          Syntax(ClosureExpr)@29..194
+            Token(TkFunction)@29..37 "function"
+            Token(TkWhitespace)@37..38 " "
+            Syntax(ParamList)@38..40
+              Token(TkLeftParen)@38..39 "("
+              Token(TkRightParen)@39..40 ")"
+            Syntax(Block)@40..191
+              Token(TkEndOfLine)@40..41 "\n"
+              Token(TkWhitespace)@41..49 "        "
+              Syntax(ForStat)@49..186
+                Token(TkFor)@49..52 "for"
+                Token(TkWhitespace)@52..53 " "
+                Token(TkName)@53..54 "i"
+                Token(TkWhitespace)@54..55 " "
+                Token(TkAssign)@55..56 "="
+                Token(TkWhitespace)@56..57 " "
+                Syntax(LiteralExpr)@57..58
+                  Token(TkInt)@57..58 "1"
+                Token(TkComma)@58..59 ","
+                Token(TkWhitespace)@59..60 " "
+                Syntax(LiteralExpr)@60..61
+                  Token(TkInt)@60..61 "2"
+                Token(TkWhitespace)@61..62 " "
+                Token(TkDo)@62..64 "do"
+                Syntax(Block)@64..183
+                  Token(TkEndOfLine)@64..65 "\n"
+                  Token(TkWhitespace)@65..77 "            "
+                  Syntax(IfStat)@77..174
+                    Token(TkIf)@77..79 "if"
+                    Token(TkWhitespace)@79..80 " "
+                    Syntax(BinaryExpr)@80..86
+                      Syntax(NameExpr)@80..81
+                        Token(TkName)@80..81 "i"
+                      Token(TkWhitespace)@81..82 " "
+                      Token(TkEq)@82..84 "=="
+                      Token(TkWhitespace)@84..85 " "
+                      Syntax(LiteralExpr)@85..86
+                        Token(TkInt)@85..86 "1"
+                    Token(TkWhitespace)@86..87 " "
+                    Token(TkThen)@87..91 "then"
+                    Syntax(Block)@91..129
+                      Token(TkEndOfLine)@91..92 "\n"
+                      Token(TkWhitespace)@92..108 "                "
+                      Syntax(ContinueStat)@108..116
+                        Token(TkContinue)@108..116 "continue"
+                      Token(TkEndOfLine)@116..117 "\n"
+                      Token(TkWhitespace)@117..129 "            "
+                    Syntax(ElseClauseStat)@129..171
+                      Token(TkElse)@129..133 "else"
+                      Syntax(Block)@133..171
+                        Token(TkEndOfLine)@133..134 "\n"
+                        Token(TkWhitespace)@134..150 "                "
+                        Syntax(ReturnStat)@150..158
+                          Token(TkReturn)@150..156 "return"
+                          Token(TkWhitespace)@156..157 " "
+                          Syntax(NameExpr)@157..158
+                            Token(TkName)@157..158 "i"
+                        Token(TkEndOfLine)@158..159 "\n"
+                        Token(TkWhitespace)@159..171 "            "
+                    Token(TkEnd)@171..174 "end"
+                  Token(TkEndOfLine)@174..175 "\n"
+                  Token(TkWhitespace)@175..183 "        "
+                Token(TkEnd)@183..186 "end"
+              Token(TkEndOfLine)@186..187 "\n"
+              Token(TkWhitespace)@187..191 "    "
+            Token(TkEnd)@191..194 "end"
+        Token(TkEndOfLine)@194..195 "\n"
+        Token(TkRightBrace)@195..196 "}"
+    Token(TkEndOfLine)@196..197 "\n"
+    Token(TkEndOfLine)@197..198 "\n"
+    Syntax(AssignStat)@198..275
+      Syntax(NameExpr)@198..206
+        Token(TkName)@198..206 "continue"
+      Token(TkWhitespace)@206..207 " "
+      Token(TkAssign)@207..208 "="
+      Syntax(TableObjectExpr)@208..275
+        Token(TkLeftBrace)@208..209 "{"
+        Token(TkEndOfLine)@209..210 "\n"
+        Token(TkWhitespace)@210..214 "    "
+        Syntax(TableFieldAssign)@214..273
+          Token(TkName)@214..219 "const"
+          Token(TkWhitespace)@219..220 " "
+          Token(TkAssign)@220..221 "="
+          Token(TkWhitespace)@221..222 " "
+          Syntax(ClosureExpr)@222..273
+            Token(TkFunction)@222..230 "function"
+            Token(TkWhitespace)@230..231 " "
+            Syntax(ParamList)@231..241
+              Token(TkLeftParen)@231..232 "("
+              Syntax(ParamName)@232..240
+                Token(TkName)@232..240 "continue"
+              Token(TkRightParen)@240..241 ")"
+            Syntax(Block)@241..270
+              Token(TkEndOfLine)@241..242 "\n"
+              Token(TkWhitespace)@242..250 "        "
+              Syntax(ReturnStat)@250..265
+                Token(TkReturn)@250..256 "return"
+                Token(TkWhitespace)@256..257 " "
+                Syntax(NameExpr)@257..265
+                  Token(TkName)@257..265 "continue"
+              Token(TkEndOfLine)@265..266 "\n"
+              Token(TkWhitespace)@266..270 "    "
+            Token(TkEnd)@270..273 "end"
+        Token(TkEndOfLine)@273..274 "\n"
+        Token(TkRightBrace)@274..275 "}"
+    Token(TkEndOfLine)@275..276 "\n"
+    Token(TkEndOfLine)@276..277 "\n"
+    Syntax(ConstStat)@277..330
+      Token(TkConst)@277..282 "const"
+      Token(TkWhitespace)@282..283 " "
+      Syntax(LocalName)@283..291
+        Token(TkName)@283..291 "continue"
+      Token(TkWhitespace)@291..292 " "
+      Token(TkAssign)@292..293 "="
+      Token(TkWhitespace)@293..294 " "
+      Syntax(CallExpr)@294..330
+        Syntax(IndexExpr)@294..308
+          Syntax(NameExpr)@294..302
+            Token(TkName)@294..302 "continue"
+          Token(TkDot)@302..303 "."
+          Token(TkName)@303..308 "const"
+        Token(TkWhitespace)@308..309 " "
+        Syntax(CallArgList)@309..330
+          Syntax(TableArrayExpr)@309..330
+            Token(TkLeftBrace)@309..310 "{"
+            Token(TkEndOfLine)@310..311 "\n"
+            Token(TkWhitespace)@311..315 "    "
+            Syntax(TableFieldValue)@315..328
+              Syntax(IndexExpr)@315..328
+                Syntax(NameExpr)@315..320
+                  Token(TkName)@315..320 "const"
+                Token(TkDot)@320..321 "."
+                Token(TkName)@321..328 "contiue"
+            Token(TkEndOfLine)@328..329 "\n"
+            Token(TkRightBrace)@329..330 "}"
+    Token(TkEndOfLine)@330..331 "\n"
+    Token(TkEndOfLine)@331..332 "\n"
+    Syntax(CallExprStat)@332..347
+      Syntax(CallExpr)@332..347
+        Syntax(NameExpr)@332..337
+          Token(TkName)@332..337 "print"
+        Syntax(CallArgList)@337..347
+          Token(TkLeftParen)@337..338 "("
+          Syntax(NameExpr)@338..346
+            Token(TkName)@338..346 "continue"
+          Token(TkRightParen)@346..347 ")"
+    Token(TkEndOfLine)@347..348 "\n"
+    Token(TkWhitespace)@348..356 "        "
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
+        );
+    }
+
+    #[test]
+    fn test_xor_assign() {
+        let code = "x ~= 1";
+        let result = r#"
+Syntax(Chunk)@0..6
+  Syntax(Block)@0..6
+    Syntax(AssignStat)@0..6
+      Syntax(NameExpr)@0..1
+        Token(TkName)@0..1 "x"
+      Token(TkWhitespace)@1..2 " "
+      Token(TkXorAssign)@2..4 "~="
+      Token(TkWhitespace)@4..5 " "
+      Syntax(LiteralExpr)@5..6
+        Token(TkInt)@5..6 "1"
+        "#;
+
+        assert_ast_eq!(
+            code,
+            result,
+            ParserConfig::with_level(LuaLanguageLevel::LuaJITExt)
         );
     }
 }

@@ -6,7 +6,12 @@ use crate::{
 };
 
 pub fn float_token_value(token: &LuaSyntaxToken) -> Result<f64, LuaParseError> {
-    let text = token.text();
+    let raw_text = token.text();
+    let text = if raw_text.contains('_') {
+        raw_text.replace('_', "")
+    } else {
+        raw_text.to_string()
+    };
     let hex = text.starts_with("0x") || text.starts_with("0X");
 
     // This section handles the parsing of hexadecimal floating-point numbers.
@@ -55,7 +60,7 @@ pub fn float_token_value(token: &LuaSyntaxToken) -> Result<f64, LuaParseError> {
             if let Some(pos) = text.find('e').or_else(|| text.find('E')) {
                 (&text[..pos], &text[(pos + 1)..])
             } else {
-                (text, "")
+                (text.as_str(), "")
             };
 
         let mut value = float_part.parse::<f64>().map_err(|e| {
@@ -93,6 +98,7 @@ pub enum NumberResult {
     Int(i64),
     Uint(u64),
     Float(f64),
+    Number,
 }
 
 impl NumberResult {
@@ -122,12 +128,18 @@ impl Display for NumberResult {
             NumberResult::Int(v) => write!(f, "{}", v),
             NumberResult::Uint(v) => write!(f, "{}", v),
             NumberResult::Float(v) => write!(f, "{}", v),
+            NumberResult::Number => write!(f, "number"),
         }
     }
 }
 
 pub fn int_token_value(token: &LuaSyntaxToken) -> Result<NumberResult, LuaParseError> {
-    let text = token.text();
+    let raw_text = token.text();
+    let text = if raw_text.contains('_') {
+        raw_text.replace('_', "")
+    } else {
+        raw_text.to_string()
+    };
     let repr = if text.starts_with("0x") || text.starts_with("0X") {
         IntegerRepr::Hex
     } else if text.starts_with("0b") || text.starts_with("0B") {

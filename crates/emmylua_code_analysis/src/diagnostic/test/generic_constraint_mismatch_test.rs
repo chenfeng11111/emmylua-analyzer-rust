@@ -2,11 +2,13 @@
 mod test {
 
     use crate::{DiagnosticCode, VirtualWorkspace};
+    use lsp_types::NumberOrString;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn test_1() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
                 ---@class Component
@@ -28,7 +30,7 @@ mod test {
     #[test]
     fn test_2() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
                 ---@class Component
@@ -50,7 +52,7 @@ mod test {
     #[test]
     fn test_3() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             local nargs = select('#')
@@ -61,7 +63,7 @@ mod test {
     #[test]
     fn test_4() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
                 ---@class Component
@@ -84,7 +86,7 @@ mod test {
     #[test]
     fn test_class_1() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
                 ---@class Component
@@ -105,7 +107,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
 
@@ -123,7 +125,7 @@ mod test {
     #[test]
     fn test_class_2() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             ---@class Component
@@ -144,9 +146,415 @@ mod test {
     }
 
     #[test]
+    fn test_class_generic_default_constraint_mismatch() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Base<T extends number = string>
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_bare_type_use_does_not_repeat_generic_default_constraint_mismatch() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def_file(
+            "base.lua",
+            r#"
+            ---@class Base<T extends number = string>
+            "#,
+        );
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@type Base
+            Base_A = {}
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_explicit_type_arg_still_reports_constraint_mismatch() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def_file(
+            "base.lua",
+            r#"
+            ---@class Base<T extends number = number>
+            "#,
+        );
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@type Base<string>
+            Base_A = {}
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_alias_multi_generic_keyof_constraint_mismatch() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@alias B<T, K extends keyof A> A[K]
+
+            ---@type B<A, 'two'>
+            local tmp
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_alias_multi_generic_keyof_constraint_match() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@alias B<T, K extends keyof A> A[K]
+
+            ---@type B<A, 'one'>
+            local tmp
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_alias_keyof_constraint_accepts_union_of_valid_keys() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class A
+            ---@field one 1
+            ---@field two 2
+            ---@field three 3
+
+            ---@alias Pick<T, K extends keyof T> nil
+
+            ---@type Pick<A, 'one' | 'two'>
+            local tmp
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_keyof_constraint_accepts_keyof_type() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class A
+            ---@field one 1
+            ---@field two 2
+            ---@field three 3
+
+            ---@alias C<K extends keyof A> any
+
+            ---@type C<keyof A>
+            local tmp
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_keyof_constraint_rejects_keyof_type_with_invalid_key() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class A
+            ---@field one 1
+            ---@field two 2
+
+            ---@class B
+            ---@field one 1
+            ---@field missing 3
+
+            ---@alias C<K extends keyof A> any
+
+            ---@type C<keyof B>
+            local tmp
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_keyof_constraint_rejects_invalid_union_for_keyof_type() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class A
+            ---@field one 1
+            ---@field two 2
+
+            ---@alias C<K extends keyof A> any
+
+            ---@type C<'one' | 'missing'>
+            local tmp
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_dependent_keyof_constraint_uses_explicit_type_arg() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Base
+            ---@field common 1
+
+            ---@class Exact: Base
+            ---@field one 1
+            ---@field two 2
+
+            ---@alias PickFrom<T extends Base, K extends keyof T> any
+
+            ---@type PickFrom<Exact, keyof Exact>
+            local tmp
+            "#,
+        ));
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@type PickFrom<Exact, 'error'>
+            local tmp
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_dependent_keyof_constraint_rejects_keyof_other_type() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Base
+            ---@field common 1
+
+            ---@class Exact: Base
+            ---@field one 1
+
+            ---@class Extra: Base
+            ---@field one 1
+            ---@field missing 2
+
+            ---@alias PickFrom<T extends Base, K extends keyof T> any
+
+            ---@type PickFrom<Exact, keyof Extra>
+            local tmp
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_keyof_constraint_rejects_union_with_invalid_key() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class A
+            ---@field one 1
+            ---@field two 2
+
+            ---@alias Pick<T, K extends keyof T> nil
+
+            ---@type Pick<A, 'one' | 'missing'>
+            local tmp
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_keyof_constraint_reports_invalid_literal_key() {
+        let mut ws = VirtualWorkspace::new();
+        ws.enable_check(DiagnosticCode::GenericConstraintMismatch);
+        let file_id = ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+
+            ---@alias Pick<T, K extends keyof T> nil
+
+            ---@type Pick<A, 'missing'>
+            local tmp
+            "#,
+        );
+
+        let diagnostics = ws
+            .analysis
+            .diagnose_file(file_id, CancellationToken::new())
+            .unwrap();
+        let code = Some(NumberOrString::String(
+            DiagnosticCode::GenericConstraintMismatch
+                .get_name()
+                .to_string(),
+        ));
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .expect("expected generic constraint mismatch diagnostic");
+        assert!(
+            diagnostic.message.contains("\"missing\""),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn test_class_generic_default_constraint_match() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Base<T extends number = number>
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_dependent_generic_default_must_satisfy_rigid_type_param_constraint() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Box<T extends string, U extends T = "x">
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_dependent_generic_default_can_reference_same_type_param() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Box<T extends string, U extends T = T>
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_dependent_generic_default_uses_type_param_constraint_as_upper_bound() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Box<T extends string, U extends string = T>
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_dependent_keyof_default_must_satisfy_any_valid_type_arg() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Base
+            ---@field common 1
+
+            ---@class Exact: Base
+            ---@field one 1
+
+            ---@alias PickFrom<T extends Base = Exact, K extends keyof T = keyof Exact> any
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_dependent_keyof_default_can_reference_same_type_param() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Base
+            ---@field common 1
+
+            ---@class Exact: Base
+            ---@field one 1
+
+            ---@alias PickFrom<T extends Base = Exact, K extends keyof T = keyof T> any
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_alias_generic_default_constraint_mismatch() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@alias Base<T extends number = string> T
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_function_generic_default_constraint_mismatch() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@generic T extends number = string
+            local function f()
+            end
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_call_constraint_uses_uninferred_generic_default() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@generic T = number, U extends T
+            ---@param value U
+            local function f(value)
+            end
+
+            f("not a number")
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_colon_call_constraint_uses_receiver_when_member_is_callable() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            ---@class Owner
+            ---@field run CallableMethod
+
+            ---@class CallableMethod
+            ---@overload fun<T: Owner>(owner: T)
+
+            ---@type Owner
+            local owner
+
+            owner:run()
+            "#,
+        ));
+    }
+
+    #[test]
     fn test_extend_string() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
                 ---@class ABC1
@@ -165,7 +573,7 @@ mod test {
     #[test]
     fn test_str_tpl_ref_param() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
                 ---@generic T
@@ -185,7 +593,7 @@ mod test {
     #[test]
     fn test_issue_516() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
                 ---@generic T: table
@@ -216,7 +624,7 @@ mod test {
             end
         "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             ---@type ab
@@ -225,14 +633,14 @@ mod test {
             name(a)
         "#
         ));
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             name("ab")
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             name("a")
@@ -253,7 +661,7 @@ mod test {
             ---@class GCNode
         "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             ---@generic T: table
@@ -284,7 +692,7 @@ mod test {
 
         "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
 
@@ -297,6 +705,47 @@ mod test {
                 return add(obj)
             end
         "#
+        ));
+    }
+
+    #[test]
+    fn test_object_constraint_with_class_duck_typing() {
+        let mut ws = VirtualWorkspace::new();
+        // A @class whose inferred Def type (e.g. from `return self`) should satisfy
+        // an object constraint via structural duck typing, same as Ref types do.
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+                ---@class MyPos
+                ---@field x number
+                ---@field y number
+                ---@field z number
+                ---@overload fun(x: number, y: number, z: number): MyPos
+                MyPos = {}
+                MyPos.__index = MyPos
+
+                setmetatable(MyPos, {
+                    __call = function(x, y, z)
+                        return setmetatable({ x = x, y = y, z = z }, MyPos)
+                    end
+                })
+
+                function MyPos:next()
+                    self.x = self.x + 1
+                    self.y = self.y + 1
+                    return self
+                end
+
+                ---@generic T: { x: number, y: number, z: number }
+                ---@param pos T
+                local function getTile(pos) end
+
+                local p = MyPos(0, 0, 0):next()
+                getTile(p)
+
+                local p2 = MyPos(1, 1, 1)
+                getTile(p2:next())
+            "#
         ));
     }
 
@@ -316,7 +765,7 @@ mod test {
                 ---@field name string
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             ---@type Person
@@ -326,13 +775,70 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::GenericConstraintMismatch,
             r#"
             ---@type Person
             local person
 
             pick(person, "name")
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_generic_constraint_can_use_conditional_type() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+                ---@generic U, T extends U extends string and number or boolean
+                ---@param val T
+                function process(val)
+                    return val
+                end
+            "#,
+        );
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+                process--[[@<string, number>]](123)
+            "#,
+        ));
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+                process--[[@<string, boolean>]](true)
+            "#,
+        ));
+    }
+
+    #[test]
+    fn test_overload_generic_constraint_merged_params() {
+        // When a generic signature has overloads, the merged main signature
+        // unions parameter types from all overloads. Constraint checks must
+        // run against the resolved overload, not the merged signature.
+        let mut ws = VirtualWorkspace::new();
+        ws.def_file(
+            "mylib.lua",
+            r#"
+            ---@meta mylib
+            local M = {}
+
+            ---@generic T: table
+            ---@overload fun(a: string, b: T?): T
+            ---@overload fun(a: string, b: integer, c: T?): T
+            function M.decode(a, b_or_c, c) end
+
+            return M
+        "#,
+        );
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::GenericConstraintMismatch,
+            r#"
+            local m = require("mylib")
+            local ret = m.decode("x", 42)
         "#
         ));
     }

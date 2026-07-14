@@ -6,6 +6,7 @@ const CARGOS: &[&str] = &[
     "crates/emmylua_doc_cli/Cargo.toml",
     "crates/emmylua_ls/Cargo.toml",
     "crates/emmylua_check/Cargo.toml",
+    "crates/emmylua_formatter/Cargo.toml",
 ];
 
 fn main() {
@@ -45,6 +46,9 @@ fn main() {
 
     let dependencies = doc["workspace"]["dependencies"].as_table_mut().unwrap();
     if let Some(dep) = dependencies.get_mut("emmylua_code_analysis") {
+        dep["version"] = value(version.clone());
+    }
+    if let Some(dep) = dependencies.get_mut("emmylua_formatter") {
         dep["version"] = value(version.clone());
     }
 

@@ -460,12 +460,12 @@ pub fn get_override_lsp_location(
     semantic_model: &SemanticModel,
     file_id: FileId,
     syntax_id: LuaSyntaxId,
-) -> Option<lsp_types::Location> {
+) -> Option<Location> {
     let document = semantic_model.get_document_by_file_id(file_id)?;
     let root = semantic_model.get_root_by_file_id(file_id)?;
     let node = syntax_id.to_node_from_root(root.syntax())?;
-    let range = if let Some(index_exor) = LuaIndexExpr::cast(node.clone()) {
-        index_exor.get_index_name_token()?.text_range()
+    let range = if let Some(index_expr) = LuaIndexExpr::cast(node.clone()) {
+        index_expr.get_index_name_token()?.text_range()
     } else {
         node.text_range()
     };
@@ -838,7 +838,7 @@ fn find_matching_enum_member<'a>(
             match (member_key, arg_type) {
                 (LuaMemberKey::Name(s), LuaType::StringConst(arg_s)) => s == arg_s.as_ref(),
                 (LuaMemberKey::Integer(i), LuaType::IntegerConst(arg_i)) => *i == *arg_i,
-                (LuaMemberKey::ExprType(typ), _) => typ == arg_type,
+                (LuaMemberKey::TypeKey(typ), _) => typ == arg_type,
                 _ => false,
             }
         } else if let Some(type_cache) = semantic_model

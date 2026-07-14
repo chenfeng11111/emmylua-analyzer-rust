@@ -7,7 +7,7 @@ mod test {
     #[test]
     fn test_1() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@alias std.NotNull<T> T - ?
@@ -30,7 +30,7 @@ mod test {
     #[test]
     fn test() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@class diagnostic.test3
@@ -43,7 +43,7 @@ mod test {
             "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@class diagnostic.test3
@@ -58,7 +58,7 @@ mod test {
     #[test]
     fn test_enum() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@enum diagnostic.enum
@@ -73,7 +73,7 @@ mod test {
     #[test]
     fn test_issue_194() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             local a ---@type 'A'
@@ -85,7 +85,7 @@ mod test {
     #[test]
     fn test_issue_917() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@alias Required917<T> { [K in keyof T]: T[K]; }
@@ -101,9 +101,25 @@ mod test {
     }
 
     #[test]
+    fn test_adjacent_alias_generic_scope_for_mapped_type() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::InjectField,
+            r#"
+                ---@alias AA<T> true
+                ---@alias FakePartial<T> {[P in keyof T]?: T[P]; }
+
+                ---@type FakePartial<{[1]:boolean}>
+                local tmp
+                tmp[1] = nil
+            "#
+        ));
+    }
+
+    #[test]
     fn test_any_key() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@class LogicalOperators
@@ -121,7 +137,7 @@ mod test {
     fn test_class_key_to_class_key() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 --- @type table<string, integer>
@@ -136,7 +152,7 @@ mod test {
             "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@generic K, V
@@ -165,7 +181,7 @@ mod test {
     fn test_2() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 local function sortCallbackOfIndex()
@@ -183,7 +199,7 @@ mod test {
     fn test_index_key_define() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 local Flags = {
@@ -204,7 +220,7 @@ mod test {
     fn test_issue_292() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             --- @type {head:string}[]?
@@ -218,7 +234,7 @@ mod test {
     #[test]
     fn test_issue_317() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 --- @class A
@@ -234,7 +250,7 @@ mod test {
     #[test]
     fn test_issue_345() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 --- @class C
@@ -256,7 +272,7 @@ mod test {
     #[test]
     fn test_index_key_by_string() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@enum (key) K1
@@ -270,7 +286,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@enum (key) K2
@@ -284,7 +300,7 @@ mod test {
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@enum K3
@@ -302,7 +318,7 @@ mod test {
     #[test]
     fn test_unknown_type() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 local function test(...)
@@ -312,7 +328,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
                 local function test(...)
@@ -326,7 +342,7 @@ mod test {
     #[test]
     fn test_g() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 print(_G['game_lua_files'])
@@ -337,7 +353,7 @@ mod test {
     #[test]
     fn test_def() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
                 ---@class ECABind
@@ -360,7 +376,7 @@ mod test {
     #[test]
     fn test_enum_1() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@enum (key) UnitAttr
@@ -380,7 +396,7 @@ mod test {
     #[test]
     fn test_enum_2() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@enum AbilityType
@@ -407,7 +423,7 @@ mod test {
     #[test]
     fn test_enum_3() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@enum (key) PlayerAttr
@@ -424,7 +440,7 @@ mod test {
     #[test]
     fn test_enum_alias() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@enum EA
@@ -456,7 +472,7 @@ mod test {
     #[test]
     fn test_userdata() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@type any
@@ -475,7 +491,7 @@ mod test {
     #[test]
     fn test_has_nil() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
 
@@ -494,7 +510,7 @@ mod test {
     #[test]
     fn test_super_integer() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@type table<integer, string>
@@ -514,7 +530,7 @@ mod test {
     #[test]
     fn test_generic_super() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@generic Super: string
@@ -530,9 +546,95 @@ mod test {
     }
 
     #[test]
+    fn test_generic_constraint_unknown_field() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@class Animal
+            ---@field name string
+            ---@field age integer
+
+            ---@generic T: Animal
+            ---@param animal T
+            ---@return T
+            function checkAnimal(animal)
+                local a = animal.name
+            end
+        "#
+        ));
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@class Animal
+            ---@field name string
+            ---@field age integer
+
+            ---@generic T: Animal
+            ---@param animal T
+            ---@return T
+            function checkAnimal(animal)
+                local a = animal.test
+            end
+        "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@generic T
+            ---@param value T
+            local function checkValue(value)
+                local a = value.test
+            end
+        "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@generic K: string
+            ---@param key K
+            local function readStringKey(key)
+                ---@type table<string, string>
+                local values
+                local value = values[key]
+            end
+        "#
+        ));
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@generic K: string
+            ---@param key K
+            local function readIntegerKey(key)
+                ---@type table<integer, string>
+                local values
+                local value = values[key]
+            end
+        "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@generic K
+            ---@param key K
+            local function readUnknownKey(key)
+                ---@type table<integer, string>
+                local values
+                local value = values[key]
+            end
+        "#
+        ));
+    }
+
+    #[test]
     fn test_ref_field() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@enum ReactiveFlags
@@ -562,7 +664,7 @@ mod test {
     #[test]
     fn test_string_add_enum_key() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@class py.GameAPI
@@ -606,7 +708,7 @@ mod test {
         arg = lua_get_start_args()
         "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             local function isDebuggerValid()
@@ -620,7 +722,7 @@ mod test {
     #[test]
     fn test_if_1() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             ---@type table<int, string>
@@ -642,7 +744,7 @@ mod test {
                 }
         "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@param p Enum
@@ -652,7 +754,7 @@ mod test {
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@param p Enum
@@ -663,7 +765,7 @@ mod test {
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@param p Enum
@@ -687,7 +789,7 @@ mod test {
                 }
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
 
@@ -696,7 +798,7 @@ mod test {
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
 
@@ -717,7 +819,7 @@ mod test {
             "#,
         );
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 if Flags.b then
@@ -725,7 +827,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 if Flags["b"] then
@@ -733,7 +835,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@type string
@@ -743,7 +845,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
                 ---@type string
@@ -760,13 +862,12 @@ mod test {
         ws.def_file(
             "a.lua",
             r#"
-            ---@export
             local export = {}
 
             return export
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             local a = require("a")
@@ -774,18 +875,16 @@ mod test {
             "#,
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
             local a = require("a").ABC
             "#,
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
-
-            ---@export
             local export = {}
 
             export.aaa()
@@ -811,11 +910,140 @@ mod test {
         name = "beforeAll"
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::UndefinedField,
             r#"
         local a = hooks[name]
         "#
+        ));
+    }
+
+    #[test]
+    fn test_issue_1018() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias TypeGuard<T> boolean
+
+            ---@class MyClass
+            ---@class MyInheritedClass : MyClass
+            ---@field test fun(): void
+
+            ---@param instance MyClass
+            ---@return TypeGuard<MyInheritedClass>
+            function typeguard(instance)
+                return true
+            end
+
+
+            "#,
+        );
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@type MyClass
+            local instance = {}
+            if typeguard(instance) then
+                instance:test()
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_intersection_array_index_access() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        // Accessing [1] on an intersection type containing an array should not report undefined-field
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            function test(...)
+                local values = table.pack(...)
+                local e = values[1]
+            end
+            "#
+        ));
+
+        // Explicit intersection type annotation
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+            ---@type integer[] & { n: integer }
+            local values
+            local e = values[1]
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_array_index_with_integer_literal_union() {
+        let mut ws = VirtualWorkspace::new();
+        let code = r#"
+            ---@alias IntegerPartIndex
+            ---| 1
+            ---| 2
+
+            ---@alias NumericPartIndex
+            ---| 1
+            ---| number
+
+            local parts --- @type string[]
+            local id --- @type 1|2
+            local alias_id --- @type IntegerPartIndex
+            local numeric_id --- @type NumericPartIndex
+            result = parts[id]
+            alias_result = parts[alias_id]
+            numeric_result = parts[numeric_id]
+            "#;
+
+        assert!(ws.has_no_diagnostic(DiagnosticCode::UndefinedField, code));
+        assert_eq!(ws.expr_ty("result"), ws.ty("string?"));
+        assert_eq!(ws.expr_ty("alias_result"), ws.ty("string?"));
+        assert_eq!(ws.expr_ty("numeric_result"), ws.ty("string?"));
+    }
+
+    #[test]
+    fn test_table_generic_value_with_thread_key() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+                ---@class Box<T>
+                ---@field value T
+
+                ---@class Container
+                ---@field items table<thread, Box<unknown>?>
+                local Container = {}
+
+                ---@param co thread
+                function Container:get(co)
+                    local item = self.items[co]
+                    return item
+                end
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_table_generic_value_with_boolean_key() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::UndefinedField,
+            r#"
+                ---@class Box<T>
+                ---@field value T
+
+                ---@class Container
+                ---@field items table<boolean, Box<unknown>?>
+                local Container = {}
+
+                ---@param key boolean
+                function Container:get(key)
+                    local item = self.items[key]
+                    return item
+                end
+            "#
         ));
     }
 }

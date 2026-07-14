@@ -1,4 +1,4 @@
-use emmylua_code_analysis::LuaTypeDeclId;
+use emmylua_code_analysis::{LuaTypeDeclId, is_attribute_class};
 use emmylua_parser::{LuaAstNode, LuaDocAttributeUse, LuaDocNameType, LuaSyntaxKind, LuaTokenKind};
 use lsp_types::CompletionItem;
 use std::collections::HashSet;
@@ -7,12 +7,34 @@ use crate::handlers::completion::{
     completion_builder::CompletionBuilder, completion_data::CompletionData,
 };
 
-pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
+use super::{CompletionProvider, ProviderDecision};
+
+pub struct DocTypeProvider;
+
+impl CompletionProvider for DocTypeProvider {
+    fn name(&self) -> &'static str {
+        "doc_type"
+    }
+
+    fn supports(&self, builder: &CompletionBuilder) -> bool {
+        completion_type_for(builder).is_some()
+    }
+
+    fn complete(&self, builder: &mut CompletionBuilder) -> ProviderDecision {
+        if complete_provider(builder).is_some() {
+            ProviderDecision::Stop
+        } else {
+            ProviderDecision::NoMatch
+        }
+    }
+}
+
+fn complete_provider(builder: &mut CompletionBuilder) -> Option<()> {
     if builder.is_cancelled() {
         return None;
     }
 
-    let completion_type = check_can_add_type_completion(builder)?;
+    let completion_type = completion_type_for(builder)?;
 
     let prefix_content = builder.trigger_token.text().to_string();
     let prefix = if let Some(last_sep) = prefix_content.rfind('.') {
@@ -22,7 +44,6 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
         ""
     };
     complete_types_by_prefix(builder, prefix, None, Some(completion_type));
-    builder.stop_here();
     Some(())
 }
 
@@ -35,7 +56,14 @@ pub fn complete_types_by_prefix(
     let completion_type = completion_type.or(Some(CompletionType::Type))?;
     let file_id = builder.semantic_model.get_file_id();
     let type_index = builder.semantic_model.get_db().get_type_index();
-    let results = type_index.find_type_decls(file_id, prefix);
+    let results = type_index.find_type_decls(
+        file_id,
+        prefix,
+        builder
+            .semantic_model
+            .get_db()
+            .resolve_workspace_id(file_id),
+    );
 
     for (name, type_decl) in results {
         if let Some(filter) = filter
@@ -48,24 +76,14 @@ pub fn complete_types_by_prefix(
         match completion_type {
             CompletionType::AttributeUse => {
                 if let Some(decl_id) = type_decl {
-                    let type_decl = builder
-                        .semantic_model
-                        .get_db()
-                        .get_type_index()
-                        .get_type_decl(&decl_id)?;
-                    if type_decl.is_attribute() {
+                    if is_attribute_class(builder.semantic_model.get_db(), &decl_id) {
                         add_type_completion_item(builder, &name, Some(decl_id));
                     }
                 }
             }
             CompletionType::Type => {
                 if let Some(decl_id) = &type_decl {
-                    let type_decl = builder
-                        .semantic_model
-                        .get_db()
-                        .get_type_index()
-                        .get_type_decl(decl_id)?;
-                    if type_decl.is_attribute() {
+                    if is_attribute_class(builder.semantic_model.get_db(), decl_id) {
                         continue;
                     }
                 }
@@ -82,7 +100,7 @@ pub enum CompletionType {
     AttributeUse,
 }
 
-fn check_can_add_type_completion(builder: &CompletionBuilder) -> Option<CompletionType> {
+fn completion_type_for(builder: &CompletionBuilder) -> Option<CompletionType> {
     match builder.trigger_token.kind().into() {
         LuaTokenKind::TkName => {
             let parent = builder.trigger_token.parent()?;
@@ -144,7 +162,7 @@ fn add_type_completion_item(
     };
 
     let data = if let Some(id) = type_decl {
-        CompletionData::from_property_owner_id(builder, id.into(), None)
+        CompletionData::from_property_owner_id(builder, id.into())
     } else {
         None
     };

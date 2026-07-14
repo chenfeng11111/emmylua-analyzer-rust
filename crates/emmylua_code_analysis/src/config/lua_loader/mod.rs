@@ -1,39 +1,52 @@
+use std::time::Duration;
+
 use luars::{
-    LuaResult, LuaVM, LuaValue,
-    lua_vm::{LuaState, SafeOption},
+    Lua, LuaApi, LuaResult, LuaSandboxApi, LuaState, LuaTable, LuaValue, SafeOption, SandboxConfig,
 };
 use serde_json::Value;
 
 pub fn load_lua_config(content: &str) -> Result<Value, String> {
-    let mut lua = LuaVM::new(SafeOption {
-        max_call_depth: 64,
-        max_stack_size: 256,
-        max_memory_limit: 100 * 1024 * 1024, // 100 MB
-    });
+    let mut lua = Lua::new(SafeOption::default());
+    let _ = lua.open_stdlibs(&[
+        luars::Stdlib::Package,
+        luars::Stdlib::Basic,
+        luars::Stdlib::Table,
+        luars::Stdlib::String,
+        luars::Stdlib::Math,
+        luars::Stdlib::Os,
+        luars::Stdlib::Utf8,
+    ]);
 
-    let _ = lua.open_stdlib(luars::Stdlib::Package);
-    let _ = lua.open_stdlib(luars::Stdlib::Basic);
-    let _ = lua.open_stdlib(luars::Stdlib::Table);
-    let _ = lua.open_stdlib(luars::Stdlib::String);
-    let _ = lua.open_stdlib(luars::Stdlib::Math);
-    let _ = lua.open_stdlib(luars::Stdlib::Os);
-    let _ = lua.open_stdlib(luars::Stdlib::Utf8);
     let _ = lua.set_global("print", LuaValue::cfunction(ls_println));
+    let sandbox = SandboxConfig {
+        basic: true,
+        math: true,
+        string: true,
+        table: true,
+        utf8: true,
+        coroutine: false,
+        os: true,
+        io: false,
+        package: true,
+        debug: false,
+        allow_require: true,
+        allow_load: false,
+        allow_loadfile: false,
+        allow_dofile: false,
+        timeout: Some(Duration::from_secs(1)),
+        memory_limit_bytes: Some(10 * 1024 * 1024), // 10 MB
+        ..Default::default()
+    };
 
-    let values = match lua.execute_string(content) {
+    let r = match lua.load_sandboxed(content, &sandbox).eval::<LuaTable>() {
         Ok(v) => v,
         Err(e) => {
-            let err_msg = lua.main_state().get_error_msg(e);
+            let err_msg = lua.get_error_message(e);
             return Err(format!("Failed to execute lua config: {:?}", err_msg));
         }
     };
 
-    if values.is_empty() {
-        return Err("Lua config did not return any value".to_string());
-    }
-
-    let value = values[0];
-    lua.serialize_to_json(&value)
+    serde_json::to_value(r).map_err(|e| format!("Failed to convert lua table to json: {:?}", e))
 }
 
 fn ls_println(l: &mut LuaState) -> LuaResult<usize> {

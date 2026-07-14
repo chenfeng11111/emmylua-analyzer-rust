@@ -7,9 +7,9 @@ use emmylua_parser::{
 use rowan::{NodeOrToken, TextRange};
 
 use crate::{
-    DiagnosticCode, LuaDeclExtra, LuaDeclId, LuaMemberKey, LuaSemanticDeclId, LuaType,
-    SemanticDeclLevel, SemanticModel, TypeCheckFailReason, TypeCheckResult, VariadicType,
-    infer_index_expr,
+    DbIndex, DiagnosticCode, LuaBuiltinAttributeKind, LuaDeclExtra, LuaDeclId, LuaMemberKey,
+    LuaSemanticDeclId, LuaType, SemanticDeclLevel, SemanticModel, TypeCheckFailReason,
+    TypeCheckResult, VariadicType, get_real_type, infer_index_expr,
 };
 
 use super::{Checker, DiagnosticContext, humanize_lint_type};
@@ -75,7 +75,7 @@ fn check_name_expr(
     value_type: LuaType,
 ) -> Option<()> {
     let semantic_decl = semantic_model.find_decl(
-        rowan::NodeOrToken::Node(name_expr.syntax().clone()),
+        NodeOrToken::Node(name_expr.syntax().clone()),
         SemanticDeclLevel::default(),
     )?;
     let source_type = match semantic_decl.clone() {
@@ -104,6 +104,10 @@ fn check_name_expr(
         }
         _ => None,
     };
+    let source_type = source_type.map(|source_type| {
+        semantic_model
+            .apply_assignment_target_casts(LuaExpr::NameExpr(name_expr.clone()), source_type)
+    });
     check_assign_type_mismatch(
         context,
         semantic_model,
@@ -116,7 +120,7 @@ fn check_name_expr(
         check_table_expr(
             context,
             semantic_model,
-            rowan::NodeOrToken::Node(name_expr.syntax().clone()),
+            NodeOrToken::Node(name_expr.syntax().clone()),
             &expr,
             source_type.as_ref(),
         );
@@ -139,6 +143,10 @@ fn check_index_expr(
         false,
     )
     .ok();
+    let source_type = source_type.map(|source_type| {
+        semantic_model
+            .apply_assignment_target_casts(LuaExpr::IndexExpr(index_expr.clone()), source_type)
+    });
 
     check_assign_type_mismatch(
         context,
@@ -152,7 +160,7 @@ fn check_index_expr(
         check_table_expr(
             context,
             semantic_model,
-            rowan::NodeOrToken::Node(index_expr.syntax().clone()),
+            NodeOrToken::Node(index_expr.syntax().clone()),
             &expr,
             source_type.as_ref(),
         );
@@ -195,7 +203,7 @@ fn check_local_stat(
             check_table_expr(
                 context,
                 semantic_model,
-                rowan::NodeOrToken::Node(var.syntax().clone()),
+                NodeOrToken::Node(var.syntax().clone()),
                 expr,
                 Some(&var_type),
             );
@@ -219,23 +227,30 @@ pub fn check_table_expr(
             .get_property_index()
             .get_property(&semantic_decl)
         {
-            if let Some(lsp_optimization) = property.find_attribute_use("lsp_optimization") {
-                if let Some(LuaType::DocStringConst(code)) =
-                    lsp_optimization.get_param_by_name("code")
-                {
-                    if code.as_ref() == "check_table_field" {
-                        return Some(false);
-                    }
-                };
+            if property
+                .find_builtin_attribute(LuaBuiltinAttributeKind::LspOptimization)
+                .and_then(|attribute_use| attribute_use.as_lsp_optimization())
+                .is_some_and(|attribute| attribute.is_skip_table_fields_check())
+            {
+                return Some(false);
             }
         }
     }
 
     let table_type = table_type?;
-    if let Some(table_expr) = LuaTableExpr::cast(table_expr.syntax().clone()) {
-        return check_table_expr_content(context, semantic_model, table_type, &table_expr);
+    let Some(table_expr) = LuaTableExpr::cast(table_expr.syntax().clone()) else {
+        return Some(false);
+    };
+
+    let cache_key = (table_expr.get_syntax_id(), table_type.clone());
+    if let Some(has_diagnostic) = context.get_table_expr_check_result(&cache_key) {
+        return Some(has_diagnostic);
     }
-    Some(false)
+
+    let has_diagnostic =
+        check_table_expr_content(context, semantic_model, table_type, &table_expr)?;
+    context.set_table_expr_check_result(cache_key, has_diagnostic);
+    Some(has_diagnostic)
 }
 
 // 处理 value_expr 是 TableExpr 的情况, 但不会处理 `local a = { x = 1 }, local v = a`
@@ -249,9 +264,9 @@ fn check_table_expr_content(
     let mut check_count = 0;
     let mut has_diagnostic = false;
 
-    let fields = table_expr.get_fields().collect::<Vec<_>>();
+    let fields = table_expr.get_fields_with_keys();
 
-    for (idx, field) in fields.iter().enumerate() {
+    for (idx, (field, field_key)) in fields.iter().enumerate() {
         check_count += 1;
         if check_count > MAX_CHECK_COUNT {
             return Some(has_diagnostic);
@@ -282,10 +297,7 @@ fn check_table_expr_content(
             continue;
         }
 
-        let Some(field_key) = field.get_field_key() else {
-            continue;
-        };
-        let Some(member_key) = semantic_model.get_member_key(&field_key) else {
+        let Some(member_key) = semantic_model.get_member_key(field_key) else {
             continue;
         };
 
@@ -296,7 +308,8 @@ fn check_table_expr_content(
             }
         };
 
-        if (source_type.is_table() || source_type.is_custom_type())
+        let real_source_type = get_real_type_or_self(semantic_model.get_db(), &source_type);
+        if (real_source_type.is_table() || real_source_type.is_custom_type())
             && let Some(table_expr) = LuaTableExpr::cast(value_expr.syntax().clone())
         {
             // 检查子表
@@ -383,12 +396,15 @@ fn check_assign_type_mismatch(
         return Some(false);
     }
 
-    match (&source_type, &value_type) {
+    let real_source_type = get_real_type_or_self(semantic_model.get_db(), source_type);
+    match (real_source_type, value_type) {
         // 如果源类型是定义类型, 则仅在目标类型是定义类型或引用类型时进行类型检查
         (LuaType::Def(_), LuaType::Def(_) | LuaType::Ref(_)) => {}
         (LuaType::Def(_), _) => return Some(false),
         // 此时检查交给 table_field
-        (LuaType::Ref(_) | LuaType::Tuple(_), LuaType::TableConst(_)) => return Some(false),
+        (LuaType::Ref(_) | LuaType::Tuple(_) | LuaType::Generic(_), LuaType::TableConst(_)) => {
+            return Some(false);
+        }
         (LuaType::Nil, _) => return Some(false),
         (LuaType::Ref(_), LuaType::Instance(instance)) => {
             if instance.get_base().is_table() {
@@ -447,4 +463,8 @@ fn add_type_check_diagnostic(
             );
         }
     }
+}
+
+fn get_real_type_or_self<'a>(db: &'a DbIndex, ty: &'a LuaType) -> &'a LuaType {
+    get_real_type(db, ty).unwrap_or(ty)
 }

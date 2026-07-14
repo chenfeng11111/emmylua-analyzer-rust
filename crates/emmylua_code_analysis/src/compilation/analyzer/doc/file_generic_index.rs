@@ -1,242 +1,237 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use rowan::{TextRange, TextSize};
+use smol_str::SmolStr;
+use std::sync::Arc;
 
-use crate::{GenericParam, GenericTplId, LuaType};
+use crate::{GenericParam, GenericTpl, GenericTplId};
 
 #[derive(Debug, Clone)]
 pub struct FileGenericIndex {
-    generic_params: Vec<TagGenericParams>,
-    root_node_ids: Vec<GenericEffectId>,
-    effect_nodes: Vec<GenericEffectRangeNode>,
+    scopes: Vec<FileGenericScope>,
 }
 
 impl FileGenericIndex {
     pub fn new() -> Self {
-        Self {
-            generic_params: Vec::new(),
-            root_node_ids: Vec::new(),
-            effect_nodes: Vec::new(),
+        Self { scopes: Vec::new() }
+    }
+
+    fn next_tpl_id(&self, ranges: &[TextRange], is_func: bool) -> GenericTplId {
+        let next_index = self.next_index(ranges, is_func).unwrap_or(0) as u32;
+        if is_func {
+            GenericTplId::Func(next_index)
+        } else {
+            GenericTplId::Type(next_index)
         }
     }
 
-    pub fn add_generic_scope(&mut self, ranges: Vec<TextRange>, is_func: bool) -> GenericParamId {
-        let params_index = self.generic_params.len();
-        let start = self.get_start(&ranges).unwrap_or(0);
-        self.generic_params
-            .push(TagGenericParams::new(is_func, start));
-        let params_id = GenericParamId::new(params_index);
-        let root_node_ids: Vec<_> = self.root_node_ids.clone();
-        for range in ranges {
-            let mut added = false;
-            for effect_id in root_node_ids.iter() {
-                if self.try_add_range_to_effect_node(range, params_id, *effect_id) {
-                    added = true;
-                }
-            }
-
-            if !added {
-                let child_node = GenericEffectRangeNode {
-                    range,
-                    params_id,
-                    children: Vec::new(),
-                };
-
-                let child_node_id = self.effect_nodes.len();
-                self.effect_nodes.push(child_node);
-                self.root_node_ids.push(GenericEffectId::new(child_node_id));
-            }
-        }
-
-        params_id
+    fn next_index(&self, ranges: &[TextRange], is_func: bool) -> Option<usize> {
+        let position = ranges.first()?.start();
+        Some(
+            self.scopes
+                .iter()
+                .filter(|scope| scope.is_func_scope() == is_func && scope.contains(position))
+                .map(|scope| scope.params.len())
+                .sum(),
+        )
     }
-
-    pub fn append_generic_param(&mut self, scope_id: GenericParamId, param: GenericParam) {
-        if let Some(scope) = self.generic_params.get_mut(scope_id.id) {
-            scope.insert_param(param);
-        }
-    }
-
-    pub fn append_generic_params(&mut self, scope_id: GenericParamId, params: Vec<GenericParam>) {
-        for param in params {
-            self.append_generic_param(scope_id, param);
-        }
-    }
-
-    pub fn set_param_constraint(
+    pub(super) fn add_generic_scope(
         &mut self,
-        scope_id: GenericParamId,
-        name: &str,
-        constraint: Option<LuaType>,
+        ranges: Vec<TextRange>,
+        is_func: bool,
+    ) -> GenericScopeId {
+        let scope_id = GenericScopeId::new(self.scopes.len());
+        let next_tpl_id = self.next_tpl_id(&ranges, is_func);
+        self.scopes.push(FileGenericScope::new(ranges, next_tpl_id));
+        scope_id
+    }
+
+    pub(super) fn append_generic_param(
+        &mut self,
+        scope_id: GenericScopeId,
+        param: GenericParam,
+    ) -> Option<GenericTplId> {
+        if let Some(scope) = self.scopes.get_mut(scope_id.id) {
+            return Some(scope.insert_param(param));
+        }
+        None
+    }
+
+    pub(super) fn append_generic_params(
+        &mut self,
+        scope_id: GenericScopeId,
+        params: Vec<GenericParam>,
     ) {
-        if let Some(scope) = self.generic_params.get_mut(scope_id.id)
-            && let Some((_idx, stored_param)) = scope.params.get_mut(name)
-        {
-            stored_param.type_constraint = constraint;
+        for param in params {
+            let _ = self.append_generic_param(scope_id, param);
         }
-    }
-
-    fn get_start(&self, ranges: &[TextRange]) -> Option<usize> {
-        let params_ids = self.find_generic_params(ranges.first()?.start())?;
-        let mut start = 0;
-        for params_id in params_ids.iter() {
-            if let Some(params) = self.generic_params.get(*params_id) {
-                start += params.params.len();
-            }
-        }
-        Some(start)
-    }
-
-    fn try_add_range_to_effect_node(
-        &mut self,
-        range: TextRange,
-        id: GenericParamId,
-        effect_id: GenericEffectId,
-    ) -> bool {
-        let effect_node = match self.effect_nodes.get(effect_id.id) {
-            Some(node) => node,
-            None => return false,
-        };
-
-        if effect_node.range.contains_range(range) {
-            let children = effect_node.children.clone();
-            for child_effect_id in children {
-                if self.try_add_range_to_effect_node(range, id, child_effect_id) {
-                    return true;
-                }
-            }
-
-            let child_node = GenericEffectRangeNode {
-                range,
-                params_id: id,
-                children: Vec::new(),
-            };
-
-            let child_node_id = self.effect_nodes.len();
-            self.effect_nodes.push(child_node);
-            let effect_node = match self.effect_nodes.get_mut(effect_id.id) {
-                Some(node) => node,
-                None => return false,
-            };
-            effect_node
-                .children
-                .push(GenericEffectId::new(child_node_id));
-            return true;
-        }
-
-        false
     }
 
     /// Find generic parameter by position and name.
-    /// return (GenericTplId, constraint)
-    pub fn find_generic(
+    pub(super) fn find_generic(
         &self,
         position: TextSize,
         name: &str,
-    ) -> Option<(GenericTplId, Option<LuaType>)> {
-        let params_ids = self.find_generic_params(position)?;
+    ) -> Option<(GenericTplId, GenericParam)> {
+        for scope in self.scopes.iter().rev() {
+            if !scope.contains(position) {
+                continue;
+            }
 
-        for params_id in params_ids.iter().rev() {
-            if let Some(params) = self.generic_params.get(*params_id)
-                && let Some((id, param)) = params.params.get(name)
+            if let Some((id, param)) = scope
+                .params
+                .iter()
+                .rev()
+                .find(|(_, param)| param.name == name)
             {
-                let tpl_id = if params.is_func {
-                    GenericTplId::Func(*id as u32)
-                } else {
-                    GenericTplId::Type(*id as u32)
-                };
-                return Some((tpl_id, param.type_constraint.clone()));
+                return Some((*id, param.clone()));
             }
         }
 
         None
     }
 
-    fn find_generic_params(&self, position: TextSize) -> Option<Vec<usize>> {
-        for effect_id in self.root_node_ids.iter() {
-            if self
-                .effect_nodes
-                .get(effect_id.id)?
-                .range
-                .contains(position)
-            {
-                let mut result = Vec::new();
-                self.try_find_generic_params(position, *effect_id, &mut result);
-                return Some(result);
-            }
-        }
-
-        None
-    }
-
-    fn try_find_generic_params(
-        &self,
-        position: TextSize,
-        effect_id: GenericEffectId,
-        result: &mut Vec<usize>,
+    pub(super) fn update_generic_param(
+        &mut self,
+        tpl_id: GenericTplId,
+        param: GenericParam,
     ) -> Option<()> {
-        let effect_node = self.effect_nodes.get(effect_id.id)?;
-        result.push(effect_node.params_id.id);
-        for child_effect_id in effect_node.children.iter() {
-            let child_effect_node = self.effect_nodes.get(child_effect_id.id)?;
-            if child_effect_node.range.contains(position) {
-                self.try_find_generic_params(position, *child_effect_id, result);
+        for scope in self.scopes.iter_mut().rev() {
+            for (id, current_param) in &mut scope.params {
+                if *id == tpl_id {
+                    *current_param = param;
+                    return Some(());
+                }
             }
         }
 
-        Some(())
+        None
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-pub struct GenericParamId {
+pub struct GenericScopeId {
     pub id: usize,
 }
 
-impl GenericParamId {
+impl GenericScopeId {
     fn new(id: usize) -> Self {
         Self { id }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct GenericEffectRangeNode {
-    range: TextRange,
-    params_id: GenericParamId,
-    children: Vec<GenericEffectId>,
+struct FileGenericScope {
+    ranges: Vec<TextRange>,
+    params: Vec<(GenericTplId, GenericParam)>,
+    next_tpl_id: GenericTplId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-struct GenericEffectId {
-    id: usize,
-}
-
-impl GenericEffectId {
-    fn new(id: usize) -> Self {
-        Self { id }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TagGenericParams {
-    params: HashMap<String, (usize, GenericParam)>,
-    is_func: bool,
-    next_index: usize,
-}
-
-impl TagGenericParams {
-    pub fn new(is_func: bool, start: usize) -> Self {
+impl FileGenericScope {
+    fn new(ranges: Vec<TextRange>, next_tpl_id: GenericTplId) -> Self {
         Self {
-            params: HashMap::new(),
-            is_func,
-            next_index: start,
+            ranges,
+            params: Vec::new(),
+            next_tpl_id,
         }
     }
 
-    fn insert_param(&mut self, param: GenericParam) {
-        let current_index = self.next_index;
-        self.next_index += 1;
+    fn is_func_scope(&self) -> bool {
+        self.next_tpl_id.is_func()
+    }
+
+    fn insert_param(&mut self, param: GenericParam) -> GenericTplId {
+        let tpl_id = self.next_tpl_id;
+        self.next_tpl_id = self.next_tpl_id.with_idx((tpl_id.get_idx() + 1) as u32);
+        self.params.push((tpl_id, param));
+        tpl_id
+    }
+
+    fn contains(&self, position: TextSize) -> bool {
+        self.ranges.iter().any(|range| range.contains(position))
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ConditionalInferIndex {
+    scopes: Vec<ConditionalInferScope>,
+    next_infer_id: u32,
+}
+
+impl ConditionalInferIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn enter_scope(&mut self) {
+        self.scopes.push(ConditionalInferScope::new());
+    }
+
+    pub fn leave_scope(&mut self) -> Option<ConditionalInferScope> {
+        self.scopes.pop()
+    }
+
+    pub fn set_current_refs_visible(&mut self, visible: bool) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.refs_visible = visible;
+        }
+    }
+
+    pub fn declare(&mut self, name: &str) -> Option<Arc<GenericTpl>> {
+        let scope_idx = self.scopes.len().checked_sub(1)?;
+        if let Some(tpl) = self.scopes[scope_idx].bindings.get(name) {
+            return Some(tpl.clone());
+        }
+
+        let tpl_id = GenericTplId::ConditionalInfer(self.next_infer_id);
+        self.next_infer_id += 1;
+        let param = GenericParam::new(SmolStr::new(name), None, None, false, None);
+        let tpl = Arc::new(GenericTpl::new(
+            tpl_id,
+            param.name.clone(),
+            param.constraint.clone(),
+            param.default.clone(),
+            param.is_const,
+            param.attributes.clone(),
+        ));
+
+        let scope = &mut self.scopes[scope_idx];
+        scope.bindings.insert(name.to_string(), tpl.clone());
+        scope.params.push(param);
+        Some(tpl)
+    }
+
+    pub fn find_ref(&self, name: &str) -> Option<Arc<GenericTpl>> {
+        self.scopes
+            .iter()
+            .rev()
+            .filter(|scope| scope.refs_visible)
+            .find_map(|scope| scope.bindings.get(name).cloned())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConditionalInferScope {
+    /// 是否允许在当前阶段把普通名字解析为 conditional infer 引用.
+    /// condition 阶段只声明 `infer P`, true 分支阶段才允许引用 `P`.
+    refs_visible: bool,
+    /// 当前 conditional 作用域内的 `infer` 名字到实际模板的绑定.
+    /// 同名 `infer P` 会复用同一个 `GenericTplId::ConditionalInfer`.
+    bindings: HashMap<String, Arc<GenericTpl>>,
+    /// 当前 conditional 声明过的 infer 参数元数据, 保留给 `LuaConditionalType`.
+    params: Vec<GenericParam>,
+}
+
+impl ConditionalInferScope {
+    fn new() -> Self {
+        Self {
+            refs_visible: false,
+            bindings: HashMap::new(),
+            params: Vec::new(),
+        }
+    }
+
+    pub fn into_params(self) -> Vec<GenericParam> {
         self.params
-            .insert(param.name.to_string(), (current_index, param));
     }
 }

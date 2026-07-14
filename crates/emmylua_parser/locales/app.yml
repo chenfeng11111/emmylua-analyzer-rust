@@ -99,6 +99,10 @@ expected %{token}, but get %{current}:
   en: expected %{token}, but get %{current}
   zh_CN: 期望 %{token}, 但得到 %{current}
   zh_HK: 期望 %{token}, 但得到 %{current}
+expected %{token}:
+  en: expected "%{token}"
+  zh_CN: 期望 "%{token}"
+  zh_HK: 期望 "%{token}"
 integer division is not supported:
   en: integer division is not supported
   zh_CN: 不支持整数除法
@@ -555,3 +559,7 @@ unfinished long comment:
   en: unfinished long comment
   zh_CN: 未完成的长注释
   zh_HK: 未完成的長註釋
+Identifier expected. '%{reserved}' is a reserved word that cannot be used here.:
+  en: Identifier expected. '%{reserved}' is a reserved word that cannot be used here.
+  zh_CN: 应为标识符。'%{reserved}' 是保留字，不能在此处使用。
+  zh_HK: 應為標識符。'%{reserved}' 是保留字，不能在此處使用。

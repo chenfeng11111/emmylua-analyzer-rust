@@ -1,3 +1,4 @@
+use emmylua_code_analysis::EmmyrcLuaVersion::LuaJITExt;
 use emmylua_parser::{LuaAstNode, LuaKind, LuaNameExpr, LuaSyntaxKind, LuaTokenKind};
 use lsp_types::{CompletionItem, CompletionItemLabelDetails, InsertTextFormat, InsertTextMode};
 
@@ -7,7 +8,32 @@ use crate::handlers::completion::{
     data::{KEYWORD_COMPLETIONS, KEYWORD_EXPR_COMPLETIONS},
 };
 
-pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
+use super::{CompletionProvider, ProviderDecision};
+
+pub struct KeywordsProvider;
+
+impl CompletionProvider for KeywordsProvider {
+    fn name(&self) -> &'static str {
+        "keywords"
+    }
+
+    fn supports(&self, builder: &CompletionBuilder) -> bool {
+        matches!(
+            builder.trigger_token.kind().into(),
+            LuaTokenKind::TkName | LuaTokenKind::TkWhitespace
+        ) || is_full_match_keyword(builder).is_some()
+    }
+
+    fn complete(&self, builder: &mut CompletionBuilder) -> ProviderDecision {
+        if complete_provider(builder).is_some() {
+            ProviderDecision::Continue
+        } else {
+            ProviderDecision::NoMatch
+        }
+    }
+}
+
+fn complete_provider(builder: &mut CompletionBuilder) -> Option<()> {
     if builder.is_cancelled() {
         return None;
     }
@@ -36,7 +62,7 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
 }
 
 /// 处理中文输入法下输入完整单词的情况
-fn is_full_match_keyword(builder: &mut CompletionBuilder) -> Option<()> {
+fn is_full_match_keyword(builder: &CompletionBuilder) -> Option<()> {
     match builder.trigger_token.kind() {
         LuaKind::Token(LuaTokenKind::TkIf) => Some(()),
         LuaKind::Token(LuaTokenKind::TkElse) => Some(()),
@@ -64,6 +90,7 @@ fn add_stat_keyword_completions(
     builder: &mut CompletionBuilder,
     name_expr: Option<LuaNameExpr>,
 ) -> Option<()> {
+    let level = builder.semantic_model.get_emmyrc().runtime.version;
     if let Some(name_expr) = name_expr
         && name_expr.syntax().parent()?.parent()?.kind() != LuaSyntaxKind::Block.into()
     {
@@ -89,6 +116,9 @@ fn add_stat_keyword_completions(
                     keyword_info.insert_text.to_string(),
                 )
             };
+        if level != LuaJITExt && keyword_info.label == "continue" {
+            continue;
+        }
 
         let item = CompletionItem {
             label: keyword_info.label.to_string(),

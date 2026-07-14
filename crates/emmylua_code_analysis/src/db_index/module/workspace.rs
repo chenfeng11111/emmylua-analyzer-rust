@@ -1,14 +1,17 @@
 use std::{fmt, path::PathBuf};
 
-#[derive(Debug)]
+use crate::WorkspaceImport;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
     pub root: PathBuf,
+    pub import: WorkspaceImport,
     pub id: WorkspaceId,
 }
 
 impl Workspace {
-    pub fn new(root: PathBuf, id: WorkspaceId) -> Self {
-        Self { root, id }
+    pub fn new(root: PathBuf, import: WorkspaceImport, id: WorkspaceId) -> Self {
+        Self { root, import, id }
     }
 }
 
@@ -21,9 +24,15 @@ pub struct WorkspaceId {
 impl WorkspaceId {
     pub const STD: WorkspaceId = WorkspaceId { id: 0 };
     pub const MAIN: WorkspaceId = WorkspaceId { id: 1 };
+    pub const REMOTE: WorkspaceId = WorkspaceId { id: 2 };
+    pub const LIBRARY_START: WorkspaceId = WorkspaceId { id: 3 };
 
     pub fn is_library(&self) -> bool {
-        self.id > 1
+        self.id >= Self::LIBRARY_START.id
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.id == 2
     }
 
     pub fn is_main(&self) -> bool {
@@ -52,7 +61,8 @@ impl fmt::Display for WorkspaceId {
         match self.id {
             0 => write!(f, "std"),
             1 => write!(f, "main"),
-            _ => write!(f, "lib{}", self.id - 1),
+            2 => write!(f, "remote"),
+            _ => write!(f, "lib{}", self.id - 2),
         }
     }
 }

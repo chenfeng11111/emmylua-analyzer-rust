@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::{LuaParser, parser::ParserConfig};
+    use crate::{LuaParseErrorKind, LuaParser, parser::ParserConfig};
 
     macro_rules! assert_ast_eq {
         ($lua_code:expr, $expected:expr) => {
@@ -127,6 +127,61 @@ Syntax(Chunk)@0..163
         Token(TkEnd)@151..154 "end"
     Token(TkEndOfLine)@154..155 "\n"
     Token(TkWhitespace)@155..163 "        "
+        "#;
+
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_return_overload_tag() {
+        let code = r#"
+        ---@return_overload true, integer
+        "#;
+        let result = r#"
+Syntax(Chunk)@0..51
+  Syntax(Block)@0..51
+    Token(TkEndOfLine)@0..1 "\n"
+    Token(TkWhitespace)@1..9 "        "
+    Syntax(Comment)@9..42
+      Token(TkDocStart)@9..13 "---@"
+      Syntax(DocTagReturnOverload)@13..42
+        Token(TkTagReturnOverload)@13..28 "return_overload"
+        Token(TkWhitespace)@28..29 " "
+        Syntax(TypeLiteral)@29..33
+          Token(TkTrue)@29..33 "true"
+        Token(TkComma)@33..34 ","
+        Token(TkWhitespace)@34..35 " "
+        Syntax(TypeName)@35..42
+          Token(TkName)@35..42 "integer"
+    Token(TkEndOfLine)@42..43 "\n"
+    Token(TkWhitespace)@43..51 "        "
+        "#;
+
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_return_overload_tag_does_not_parse_named_returns() {
+        let code = r#"
+        ---@return_overload true ok, integer
+        "#;
+        let result = r#"
+Syntax(Chunk)@0..54
+  Syntax(Block)@0..54
+    Token(TkEndOfLine)@0..1 "\n"
+    Token(TkWhitespace)@1..9 "        "
+    Syntax(Comment)@9..45
+      Token(TkDocStart)@9..13 "---@"
+      Syntax(DocTagReturnOverload)@13..33
+        Token(TkTagReturnOverload)@13..28 "return_overload"
+        Token(TkWhitespace)@28..29 " "
+        Syntax(TypeLiteral)@29..33
+          Token(TkTrue)@29..33 "true"
+      Token(TkWhitespace)@33..34 " "
+      Syntax(DocDescription)@34..45
+        Token(TkDocDetail)@34..45 "ok, integer"
+    Token(TkEndOfLine)@45..46 "\n"
+    Token(TkWhitespace)@46..54 "        "
         "#;
 
         assert_ast_eq!(code, result);
@@ -998,6 +1053,68 @@ Syntax(Chunk)@0..92
     Token(TkWhitespace)@84..92 "        "
         "#;
         assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_generic_const_modifier_doc() {
+        let code = "---@class A<const T>\n---@generic const R\n---@alias B<T> const\n";
+
+        let result = r#"
+Syntax(Chunk)@0..62
+  Syntax(Block)@0..62
+    Syntax(Comment)@0..61
+      Token(TkDocStart)@0..4 "---@"
+      Syntax(DocTagClass)@4..20
+        Token(TkTagClass)@4..9 "class"
+        Token(TkWhitespace)@9..10 " "
+        Token(TkName)@10..11 "A"
+        Syntax(DocGenericDeclareList)@11..20
+          Token(TkLt)@11..12 "<"
+          Syntax(DocGenericParameter)@12..19
+            Token(TkDocConst)@12..17 "const"
+            Token(TkWhitespace)@17..18 " "
+            Token(TkName)@18..19 "T"
+          Token(TkGt)@19..20 ">"
+      Token(TkEndOfLine)@20..21 "\n"
+      Token(TkDocStart)@21..25 "---@"
+      Syntax(DocTagGeneric)@25..40
+        Token(TkTagGeneric)@25..32 "generic"
+        Token(TkWhitespace)@32..33 " "
+        Syntax(DocGenericDeclareList)@33..40
+          Syntax(DocGenericParameter)@33..40
+            Token(TkDocConst)@33..38 "const"
+            Token(TkWhitespace)@38..39 " "
+            Token(TkName)@39..40 "R"
+      Token(TkEndOfLine)@40..41 "\n"
+      Token(TkDocStart)@41..45 "---@"
+      Syntax(DocTagAlias)@45..61
+        Token(TkTagAlias)@45..50 "alias"
+        Token(TkWhitespace)@50..51 " "
+        Token(TkName)@51..52 "B"
+        Syntax(DocGenericDeclareList)@52..55
+          Token(TkLt)@52..53 "<"
+          Syntax(DocGenericParameter)@53..54
+            Token(TkName)@53..54 "T"
+          Token(TkGt)@54..55 ">"
+        Token(TkWhitespace)@55..56 " "
+        Syntax(TypeName)@56..61
+          Token(TkName)@56..61 "const"
+    Token(TkEndOfLine)@61..62 "\n"
+        "#;
+
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_generic_const_modifier_requires_identifier() {
+        let tree = LuaParser::parse("---@class A<const>\n", ParserConfig::default());
+        let errors = tree.get_errors();
+
+        assert!(errors.iter().any(|error| {
+            error.kind == LuaParseErrorKind::DocError
+                && error.message
+                    == "Identifier expected. 'const' is a reserved word that cannot be used here."
+        }));
     }
 
     #[test]
@@ -2781,91 +2898,8 @@ Syntax(Chunk)@0..263
     }
 
     #[test]
-    fn test_export_doc() {
-        let code = r#"
-        ---@export
-        local a = 1
-
-        ---@export namespace
-        local b = 2
-
-        ---@export global
-        local c = 3
-"#;
-
-        let result = r#"
-Syntax(Chunk)@0..137
-  Syntax(Block)@0..137
-    Token(TkEndOfLine)@0..1 "\n"
-    Token(TkWhitespace)@1..9 "        "
-    Syntax(Comment)@9..19
-      Token(TkDocStart)@9..13 "---@"
-      Syntax(DocTagExport)@13..19
-        Token(TkTagExport)@13..19 "export"
-    Token(TkEndOfLine)@19..20 "\n"
-    Token(TkWhitespace)@20..28 "        "
-    Syntax(LocalStat)@28..39
-      Token(TkLocal)@28..33 "local"
-      Token(TkWhitespace)@33..34 " "
-      Syntax(LocalName)@34..35
-        Token(TkName)@34..35 "a"
-      Token(TkWhitespace)@35..36 " "
-      Token(TkAssign)@36..37 "="
-      Token(TkWhitespace)@37..38 " "
-      Syntax(LiteralExpr)@38..39
-        Token(TkInt)@38..39 "1"
-    Token(TkEndOfLine)@39..40 "\n"
-    Token(TkEndOfLine)@40..41 "\n"
-    Token(TkWhitespace)@41..49 "        "
-    Syntax(Comment)@49..69
-      Token(TkDocStart)@49..53 "---@"
-      Syntax(DocTagExport)@53..69
-        Token(TkTagExport)@53..59 "export"
-        Token(TkWhitespace)@59..60 " "
-        Token(TkName)@60..69 "namespace"
-    Token(TkEndOfLine)@69..70 "\n"
-    Token(TkWhitespace)@70..78 "        "
-    Syntax(LocalStat)@78..89
-      Token(TkLocal)@78..83 "local"
-      Token(TkWhitespace)@83..84 " "
-      Syntax(LocalName)@84..85
-        Token(TkName)@84..85 "b"
-      Token(TkWhitespace)@85..86 " "
-      Token(TkAssign)@86..87 "="
-      Token(TkWhitespace)@87..88 " "
-      Syntax(LiteralExpr)@88..89
-        Token(TkInt)@88..89 "2"
-    Token(TkEndOfLine)@89..90 "\n"
-    Token(TkEndOfLine)@90..91 "\n"
-    Token(TkWhitespace)@91..99 "        "
-    Syntax(Comment)@99..116
-      Token(TkDocStart)@99..103 "---@"
-      Syntax(DocTagExport)@103..116
-        Token(TkTagExport)@103..109 "export"
-        Token(TkWhitespace)@109..110 " "
-        Token(TkName)@110..116 "global"
-    Token(TkEndOfLine)@116..117 "\n"
-    Token(TkWhitespace)@117..125 "        "
-    Syntax(LocalStat)@125..136
-      Token(TkLocal)@125..130 "local"
-      Token(TkWhitespace)@130..131 " "
-      Syntax(LocalName)@131..132
-        Token(TkName)@131..132 "c"
-      Token(TkWhitespace)@132..133 " "
-      Token(TkAssign)@133..134 "="
-      Token(TkWhitespace)@134..135 " "
-      Syntax(LiteralExpr)@135..136
-        Token(TkInt)@135..136 "3"
-    Token(TkEndOfLine)@136..137 "\n"
-        "#;
-
-        assert_ast_eq!(code, result);
-    }
-
-    #[test]
     fn test_attribute_doc() {
         let code = r#"
-        ---@attribute check_point(x: string, y: number)
         ---@[Skip, check_point("a", 0)]
         "#;
         // print_ast(code);
@@ -2874,58 +2908,34 @@ Syntax(Chunk)@0..137
         // check_point("a", 0)
         // "#);
         let result = r#"
-Syntax(Chunk)@0..105
-  Syntax(Block)@0..105
+Syntax(Chunk)@0..49
+  Syntax(Block)@0..49
     Token(TkEndOfLine)@0..1 "\n"
     Token(TkWhitespace)@1..9 "        "
-    Syntax(Comment)@9..96
+    Syntax(Comment)@9..40
       Token(TkDocStart)@9..13 "---@"
-      Syntax(DocTagAttribute)@13..56
-        Token(TkTagAttribute)@13..22 "attribute"
-        Token(TkWhitespace)@22..23 " "
-        Token(TkName)@23..34 "check_point"
-        Syntax(TypeAttribute)@34..56
-          Token(TkLeftParen)@34..35 "("
-          Syntax(DocTypedParameter)@35..44
-            Token(TkName)@35..36 "x"
-            Token(TkColon)@36..37 ":"
-            Token(TkWhitespace)@37..38 " "
-            Syntax(TypeName)@38..44
-              Token(TkName)@38..44 "string"
-          Token(TkComma)@44..45 ","
-          Token(TkWhitespace)@45..46 " "
-          Syntax(DocTypedParameter)@46..55
-            Token(TkName)@46..47 "y"
-            Token(TkColon)@47..48 ":"
-            Token(TkWhitespace)@48..49 " "
-            Syntax(TypeName)@49..55
-              Token(TkName)@49..55 "number"
-          Token(TkRightParen)@55..56 ")"
-      Token(TkEndOfLine)@56..57 "\n"
-      Token(TkWhitespace)@57..65 "        "
-      Token(TkDocStart)@65..69 "---@"
-      Syntax(DocTagAttributeUse)@69..96
-        Token(TkDocAttributeUse)@69..70 "["
-        Syntax(DocAttributeUse)@70..74
-          Syntax(TypeName)@70..74
-            Token(TkName)@70..74 "Skip"
-        Token(TkComma)@74..75 ","
-        Token(TkWhitespace)@75..76 " "
-        Syntax(DocAttributeUse)@76..95
-          Syntax(TypeName)@76..87
-            Token(TkName)@76..87 "check_point"
-          Syntax(DocAttributeCallArgList)@87..95
-            Token(TkLeftParen)@87..88 "("
-            Syntax(LiteralExpr)@88..91
-              Token(TkString)@88..91 "\"a\""
-            Token(TkComma)@91..92 ","
-            Token(TkWhitespace)@92..93 " "
-            Syntax(LiteralExpr)@93..94
-              Token(TkInt)@93..94 "0"
-            Token(TkRightParen)@94..95 ")"
-        Token(TkRightBracket)@95..96 "]"
-    Token(TkEndOfLine)@96..97 "\n"
-    Token(TkWhitespace)@97..105 "        "
+      Syntax(DocTagAttributeUse)@13..40
+        Token(TkDocAttributeUse)@13..14 "["
+        Syntax(DocAttributeUse)@14..18
+          Syntax(TypeName)@14..18
+            Token(TkName)@14..18 "Skip"
+        Token(TkComma)@18..19 ","
+        Token(TkWhitespace)@19..20 " "
+        Syntax(DocAttributeUse)@20..39
+          Syntax(TypeName)@20..31
+            Token(TkName)@20..31 "check_point"
+          Syntax(DocAttributeCallArgList)@31..39
+            Token(TkLeftParen)@31..32 "("
+            Syntax(LiteralExpr)@32..35
+              Token(TkString)@32..35 "\"a\""
+            Token(TkComma)@35..36 ","
+            Token(TkWhitespace)@36..37 " "
+            Syntax(LiteralExpr)@37..38
+              Token(TkInt)@37..38 "0"
+            Token(TkRightParen)@38..39 ")"
+        Token(TkRightBracket)@39..40 "]"
+    Token(TkEndOfLine)@40..41 "\n"
+    Token(TkWhitespace)@41..49 "        "
         "#;
         assert_ast_eq!(code, result);
     }
@@ -3063,6 +3073,54 @@ Syntax(Chunk)@0..106
             Token(TkName)@90..97 "unknown"
     Token(TkEndOfLine)@97..98 "\n"
     Token(TkWhitespace)@98..106 "        "
+"#;
+
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_alias_conditional_keyof() {
+        let code = r#"---@alias D<T,K> K extends keyof T and K or never"#;
+        let result = r#"
+Syntax(Chunk)@0..49
+  Syntax(Block)@0..49
+    Syntax(Comment)@0..49
+      Token(TkDocStart)@0..4 "---@"
+      Syntax(DocTagAlias)@4..49
+        Token(TkTagAlias)@4..9 "alias"
+        Token(TkWhitespace)@9..10 " "
+        Token(TkName)@10..11 "D"
+        Syntax(DocGenericDeclareList)@11..16
+          Token(TkLt)@11..12 "<"
+          Syntax(DocGenericParameter)@12..13
+            Token(TkName)@12..13 "T"
+          Token(TkComma)@13..14 ","
+          Syntax(DocGenericParameter)@14..15
+            Token(TkName)@14..15 "K"
+          Token(TkGt)@15..16 ">"
+        Token(TkWhitespace)@16..17 " "
+        Syntax(TypeConditional)@17..49
+          Syntax(TypeBinary)@17..34
+            Syntax(TypeName)@17..18
+              Token(TkName)@17..18 "K"
+            Token(TkWhitespace)@18..19 " "
+            Token(TkDocExtends)@19..26 "extends"
+            Token(TkWhitespace)@26..27 " "
+            Syntax(TypeUnary)@27..34
+              Token(TkDocKeyOf)@27..32 "keyof"
+              Token(TkWhitespace)@32..33 " "
+              Syntax(TypeName)@33..34
+                Token(TkName)@33..34 "T"
+          Token(TkWhitespace)@34..35 " "
+          Token(TkAnd)@35..38 "and"
+          Token(TkWhitespace)@38..39 " "
+          Syntax(TypeName)@39..40
+            Token(TkName)@39..40 "K"
+          Token(TkWhitespace)@40..41 " "
+          Token(TkOr)@41..43 "or"
+          Token(TkWhitespace)@43..44 " "
+          Syntax(TypeName)@44..49
+            Token(TkName)@44..49 "never"
 "#;
 
         assert_ast_eq!(code, result);
@@ -3211,11 +3269,19 @@ Syntax(Chunk)@0..110
     }
 
     #[test]
+    fn test_mapped_type_omits_trailing_semicolon_before_close_brace() {
+        let code = r#"---@alias Copy<T> { [K in keyof T]: T[K] }"#;
+        let tree = LuaParser::parse(code, ParserConfig::default());
+
+        assert_eq!(tree.get_errors(), &[]);
+    }
+
+    #[test]
     fn test_alias_conditional_infer_dots() {
         let code = r#"
         ---@alias ConstructorParameters<T> T extends new (fun(...: infer P): any) and P or never
         "#;
-        print_ast(code);
+        // print_ast(code);
         let result = r#"
 Syntax(Chunk)@0..106
   Syntax(Block)@0..106
@@ -3423,5 +3489,239 @@ Syntax(Chunk)@0..60
         "#;
 
         assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_type_index_access() {
+        let code = r#"
+        ---@type T[1]
+        ---@type T["a"]
+        ---@type T[A]
+        ---@type T[]
+        "#;
+        // print_ast(code);
+        let result = r#"
+Syntax(Chunk)@0..98
+  Syntax(Block)@0..98
+    Token(TkEndOfLine)@0..1 "\n"
+    Token(TkWhitespace)@1..9 "        "
+    Syntax(Comment)@9..89
+      Token(TkDocStart)@9..13 "---@"
+      Syntax(DocTagType)@13..22
+        Token(TkTagType)@13..17 "type"
+        Token(TkWhitespace)@17..18 " "
+        Syntax(TypeIndexAccess)@18..22
+          Syntax(TypeName)@18..19
+            Token(TkName)@18..19 "T"
+          Token(TkLeftBracket)@19..20 "["
+          Syntax(TypeLiteral)@20..21
+            Token(TkInt)@20..21 "1"
+          Token(TkRightBracket)@21..22 "]"
+      Token(TkEndOfLine)@22..23 "\n"
+      Token(TkWhitespace)@23..31 "        "
+      Token(TkDocStart)@31..35 "---@"
+      Syntax(DocTagType)@35..46
+        Token(TkTagType)@35..39 "type"
+        Token(TkWhitespace)@39..40 " "
+        Syntax(TypeIndexAccess)@40..46
+          Syntax(TypeName)@40..41
+            Token(TkName)@40..41 "T"
+          Token(TkLeftBracket)@41..42 "["
+          Syntax(TypeLiteral)@42..45
+            Token(TkString)@42..45 "\"a\""
+          Token(TkRightBracket)@45..46 "]"
+      Token(TkEndOfLine)@46..47 "\n"
+      Token(TkWhitespace)@47..55 "        "
+      Token(TkDocStart)@55..59 "---@"
+      Syntax(DocTagType)@59..68
+        Token(TkTagType)@59..63 "type"
+        Token(TkWhitespace)@63..64 " "
+        Syntax(TypeIndexAccess)@64..68
+          Syntax(TypeName)@64..65
+            Token(TkName)@64..65 "T"
+          Token(TkLeftBracket)@65..66 "["
+          Syntax(TypeName)@66..67
+            Token(TkName)@66..67 "A"
+          Token(TkRightBracket)@67..68 "]"
+      Token(TkEndOfLine)@68..69 "\n"
+      Token(TkWhitespace)@69..77 "        "
+      Token(TkDocStart)@77..81 "---@"
+      Syntax(DocTagType)@81..89
+        Token(TkTagType)@81..85 "type"
+        Token(TkWhitespace)@85..86 " "
+        Syntax(TypeArray)@86..89
+          Syntax(TypeName)@86..87
+            Token(TkName)@86..87 "T"
+          Token(TkLeftBracket)@87..88 "["
+          Token(TkRightBracket)@88..89 "]"
+    Token(TkEndOfLine)@89..90 "\n"
+    Token(TkWhitespace)@90..98 "        "
+        "#;
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_attribute_with_boolean() {
+        let code = r#"
+        ---@[warn(true, "str", 1, 1.4, nil)]
+        "#;
+        // print_ast(code);
+        let result = r#"
+Syntax(Chunk)@0..54
+  Syntax(Block)@0..54
+    Token(TkEndOfLine)@0..1 "\n"
+    Token(TkWhitespace)@1..9 "        "
+    Syntax(Comment)@9..45
+      Token(TkDocStart)@9..13 "---@"
+      Syntax(DocTagAttributeUse)@13..45
+        Token(TkDocAttributeUse)@13..14 "["
+        Syntax(DocAttributeUse)@14..44
+          Syntax(TypeName)@14..18
+            Token(TkName)@14..18 "warn"
+          Syntax(DocAttributeCallArgList)@18..44
+            Token(TkLeftParen)@18..19 "("
+            Syntax(LiteralExpr)@19..23
+              Token(TkTrue)@19..23 "true"
+            Token(TkComma)@23..24 ","
+            Token(TkWhitespace)@24..25 " "
+            Syntax(LiteralExpr)@25..30
+              Token(TkString)@25..30 "\"str\""
+            Token(TkComma)@30..31 ","
+            Token(TkWhitespace)@31..32 " "
+            Syntax(LiteralExpr)@32..33
+              Token(TkInt)@32..33 "1"
+            Token(TkComma)@33..34 ","
+            Token(TkWhitespace)@34..35 " "
+            Syntax(LiteralExpr)@35..38
+              Token(TkFloat)@35..38 "1.4"
+            Token(TkComma)@38..39 ","
+            Token(TkWhitespace)@39..40 " "
+            Syntax(LiteralExpr)@40..43
+              Token(TkNil)@40..43 "nil"
+            Token(TkRightParen)@43..44 ")"
+        Token(TkRightBracket)@44..45 "]"
+    Token(TkEndOfLine)@45..46 "\n"
+    Token(TkWhitespace)@46..54 "        "
+        "#;
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_generic_default_type() {
+        let code = r#"
+        ---@class A<T = number>
+
+        ---@class B<T extends number = number>
+        "#;
+        let result = r#"
+Syntax(Chunk)@0..89
+  Syntax(Block)@0..89
+    Token(TkEndOfLine)@0..1 "\n"
+    Token(TkWhitespace)@1..9 "        "
+    Syntax(Comment)@9..32
+      Token(TkDocStart)@9..13 "---@"
+      Syntax(DocTagClass)@13..32
+        Token(TkTagClass)@13..18 "class"
+        Token(TkWhitespace)@18..19 " "
+        Token(TkName)@19..20 "A"
+        Syntax(DocGenericDeclareList)@20..32
+          Token(TkLt)@20..21 "<"
+          Syntax(DocGenericParameter)@21..31
+            Token(TkName)@21..22 "T"
+            Token(TkWhitespace)@22..23 " "
+            Token(TkDocMatch)@23..24 "="
+            Token(TkWhitespace)@24..25 " "
+            Syntax(TypeName)@25..31
+              Token(TkName)@25..31 "number"
+          Token(TkGt)@31..32 ">"
+    Token(TkEndOfLine)@32..33 "\n"
+    Token(TkEndOfLine)@33..34 "\n"
+    Token(TkWhitespace)@34..42 "        "
+    Syntax(Comment)@42..80
+      Token(TkDocStart)@42..46 "---@"
+      Syntax(DocTagClass)@46..80
+        Token(TkTagClass)@46..51 "class"
+        Token(TkWhitespace)@51..52 " "
+        Token(TkName)@52..53 "B"
+        Syntax(DocGenericDeclareList)@53..80
+          Token(TkLt)@53..54 "<"
+          Syntax(DocGenericParameter)@54..79
+            Token(TkName)@54..55 "T"
+            Token(TkWhitespace)@55..56 " "
+            Token(TkDocExtends)@56..63 "extends"
+            Token(TkWhitespace)@63..64 " "
+            Syntax(TypeName)@64..70
+              Token(TkName)@64..70 "number"
+            Token(TkWhitespace)@70..71 " "
+            Token(TkDocMatch)@71..72 "="
+            Token(TkWhitespace)@72..73 " "
+            Syntax(TypeName)@73..79
+              Token(TkName)@73..79 "number"
+          Token(TkGt)@79..80 ">"
+    Token(TkEndOfLine)@80..81 "\n"
+    Token(TkWhitespace)@81..89 "        "
+        "#;
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_fun_dots() {
+        let code = r#"
+        ---@type fun(...: number):...
+        "#;
+        let result = r#"
+Syntax(Chunk)@0..47
+  Syntax(Block)@0..47
+    Token(TkEndOfLine)@0..1 "\n"
+    Token(TkWhitespace)@1..9 "        "
+    Syntax(Comment)@9..38
+      Token(TkDocStart)@9..13 "---@"
+      Syntax(DocTagType)@13..38
+        Token(TkTagType)@13..17 "type"
+        Token(TkWhitespace)@17..18 " "
+        Syntax(TypeFun)@18..38
+          Token(TkName)@18..21 "fun"
+          Token(TkLeftParen)@21..22 "("
+          Syntax(DocTypedParameter)@22..33
+            Token(TkDots)@22..25 "..."
+            Token(TkColon)@25..26 ":"
+            Token(TkWhitespace)@26..27 " "
+            Syntax(TypeName)@27..33
+              Token(TkName)@27..33 "number"
+          Token(TkRightParen)@33..34 ")"
+          Token(TkColon)@34..35 ":"
+          Syntax(DocTypeList)@35..38
+            Syntax(DocNamedReturnType)@35..38
+              Token(TkDots)@35..38 "..."
+    Token(TkEndOfLine)@38..39 "\n"
+    Token(TkWhitespace)@39..47 "        "
+          "#;
+        assert_ast_eq!(code, result);
+    }
+
+    #[test]
+    fn test_type_bare_extends_requires_conditional_branches() {
+        let code = r#"---@type ExtendsHoverShape extends table"#;
+        let tree = LuaParser::parse(code, ParserConfig::default());
+        let errors = tree.get_errors();
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, LuaParseErrorKind::DocError);
+        assert_eq!(errors[0].message, "expected \"and\"");
+        assert!(errors[0].range.is_empty());
+        assert_eq!(u32::from(errors[0].range.start()) as usize, code.len());
+    }
+
+    #[test]
+    fn test_type_extends_requires_or_branch() {
+        let code = r#"---@type ExtendsHoverShape extends table and true"#;
+        let tree = LuaParser::parse(code, ParserConfig::default());
+        let errors = tree.get_errors();
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, LuaParseErrorKind::DocError);
+        assert_eq!(errors[0].message, "expected \"or\"");
+        assert!(errors[0].range.is_empty());
+        assert_eq!(u32::from(errors[0].range.start()) as usize, code.len());
     }
 }

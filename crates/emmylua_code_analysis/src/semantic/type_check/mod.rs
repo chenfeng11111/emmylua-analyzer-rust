@@ -21,8 +21,9 @@ pub use type_check_fail_reason::TypeCheckFailReason;
 use type_check_guard::TypeCheckGuard;
 
 use crate::{
-    LuaUnionType,
+    LuaAliasCallKind, LuaGenericType, LuaUnionType, TypeSubstitutor,
     db_index::{DbIndex, LuaType},
+    instantiate_type_generic,
     semantic::type_check::type_check_context::TypeCheckContext,
 };
 pub use sub_type::is_sub_type_of;
@@ -81,8 +82,39 @@ fn check_general_type_compact(
         );
     }
 
+    // When compact_type is an Intersection, the value satisfies all components simultaneously.
+    // So it can be assigned to any target that accepts at least one component.
+    // This must be handled before the source-based dispatch, because individual source branches
+    // (e.g. Array, Ref) do not know how to decompose an intersection compact_type.
+    if let LuaType::Intersection(compact_intersection) = compact_type {
+        // Skip if source is also Intersection — that case is handled symmetrically in
+        // check_intersection_type_compact.
+        if !matches!(source, LuaType::Intersection(_)) {
+            for component in compact_intersection.get_types() {
+                if check_general_type_compact(context, source, component, check_guard.next_level()?)
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+            }
+            return Err(TypeCheckFailReason::TypeNotMatch);
+        }
+    }
+
     match source {
         LuaType::Unknown | LuaType::Any => Ok(()),
+        LuaType::TplRef(tpl) => {
+            if let Some(source_constraint) = tpl.get_constraint() {
+                return check_general_type_compact(
+                    context,
+                    source_constraint,
+                    compact_type,
+                    check_guard.next_level()?,
+                );
+            }
+
+            check_simple_type_compact(context, source, compact_type, check_guard)
+        }
         // simple type
         LuaType::Nil
         | LuaType::Table
@@ -103,9 +135,7 @@ fn check_general_type_compact(
         | LuaType::DocStringConst(_)
         | LuaType::DocIntegerConst(_)
         | LuaType::DocBooleanConst(_)
-        | LuaType::TplRef(_)
         | LuaType::StrTplRef(_)
-        | LuaType::ConstTplRef(_)
         | LuaType::Namespace(_)
         | LuaType::Variadic(_)
         | LuaType::Language(_) => {
@@ -174,14 +204,11 @@ fn check_general_type_compact(
 }
 
 fn is_like_any(ty: &LuaType) -> bool {
-    matches!(
-        ty,
-        LuaType::Any
-            | LuaType::Unknown
-            | LuaType::TplRef(_)
-            | LuaType::StrTplRef(_)
-            | LuaType::ConstTplRef(_)
-    )
+    match ty {
+        LuaType::Any | LuaType::Unknown => true,
+        LuaType::TplRef(tpl) => tpl.get_constraint().is_none(),
+        _ => false,
+    }
 }
 
 fn fast_eq_check(a: &LuaType, b: &LuaType) -> bool {
@@ -206,18 +233,49 @@ fn fast_eq_check(a: &LuaType, b: &LuaType) -> bool {
             }
             false
         }
+        (LuaType::Generic(generic_left), LuaType::Generic(generic_right)) => {
+            generic_left == generic_right
+        }
         _ => false,
     }
 }
 
+fn instantiate_generic_alias_origin(db: &DbIndex, generic: &LuaGenericType) -> Option<LuaType> {
+    let base_id = generic.get_base_type_id();
+    let decl = db.get_type_index().get_type_decl(&base_id)?;
+    if !decl.is_alias() {
+        return None;
+    }
+
+    let substitutor = TypeSubstitutor::from_alias(generic.get_params().clone(), base_id);
+    decl.get_alias_origin(db, Some(&substitutor))
+}
+
 fn escape_type(db: &DbIndex, typ: &LuaType) -> Option<LuaType> {
     match typ {
+        LuaType::TplRef(_) => {
+            return generic_tpl_constraint_type(typ).cloned();
+        }
+        LuaType::Generic(generic) if !generic.contain_tpl() => {
+            return instantiate_generic_alias_origin(db, generic);
+        }
         LuaType::Ref(type_id) => {
             let type_decl = db.get_type_index().get_type_decl(type_id)?;
             if type_decl.is_alias()
                 && let Some(origin_type) = type_decl.get_alias_origin(db, None)
             {
                 return Some(origin_type.clone());
+            }
+        }
+        LuaType::Call(alias_call)
+            if matches!(
+                alias_call.get_call_kind(),
+                LuaAliasCallKind::Index | LuaAliasCallKind::RawGet
+            ) && !typ.contain_tpl() =>
+        {
+            let resolved = instantiate_type_generic(db, typ, &TypeSubstitutor::new());
+            if resolved != *typ {
+                return Some(resolved);
             }
         }
         // todo donot escape
@@ -240,4 +298,11 @@ fn escape_type(db: &DbIndex, typ: &LuaType) -> Option<LuaType> {
     }
 
     None
+}
+
+fn generic_tpl_constraint_type(typ: &LuaType) -> Option<&LuaType> {
+    match typ {
+        LuaType::TplRef(tpl) => tpl.get_constraint().filter(|constraint| *constraint != typ),
+        _ => None,
+    }
 }

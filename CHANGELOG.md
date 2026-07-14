@@ -2,6 +2,122 @@
 
 *All notable changes to the EmmyLua Analyzer Rust project will be documented in this file.*
 
+## [0.24.0] - 2026-7-10
+
+### ✨ Added
+
+- **Support LuaJIT-Ext**: Added support for LuaJIT‑Ext syntax, including compound assignment operators, null‑safe navigation, the null‑coalescing operator, constant variables statement, the continue statement, the underscore number, and the short function syntax.
+
+- **Support LuaJIT3**: Besides LuaJIT‑Ext syntax, named variadic arguments and integer division are also supported.
+
+- **Support const generic parameters**: Added the `const T` syntax for generics, for example `---@generic const T`.
+
+- **emmylua_check severity filter**: Added the `--severity` option to filter diagnostic output by minimum severity.
+
+### ⚠️ Deprecated
+
+- **std.ConstTpl**: Marked `std.ConstTpl` as deprecated. Use the new `const T` generic syntax instead.
+
+### 🔧 Changed
+
+- **Rename table field optimization**: `lsp_optimization("skip_table_fields_check")` is now the documented name for skipping table field diagnostics. The old `check_table_field` name remains supported as a compatibility alias.
+- **Refactor hover signature**: Refactored signature rendering in hover.
+
+### 🗑️ Removed
+
+- **`---@attribute` tag**: Removed the `---@attribute` tag. Attribute definitions now use C#-like class definitions:
+```lua
+---@class NewAttribute: Attribute
+---@overload fun(args)
+```
+
+## [0.23.2] - 2026-6-3
+
+- **Fix some stuck loading issue**: Fixed some issue that cause the language server stuck at loading workspace, and improve the loading performance of large workspace
+- **Optimize formatter style**: Optimize some formatter style
+
+
+## [0.23.1] - 2026-5-14
+
+- **Fix range format issue**: Built-in formatter now supports range format
+- **Fix some formatting edge cases**: Fixed some formatting edge cases, which are still being continuously improved
+- **Fix some stuck loading issue** Fixed some issue that cause the language server stuck at loading workspace, and improve the loading performance of large workspace
+
+
+## [0.23.0] - 2026-5-9
+
+### 🔧 Changed
+
+- **New Formatter**: The new formatter(emmylua_formatter) is now the default formatter for the language server. For more information, please refer to [EmmyLua Formatter Documentation Index](docs/emmylua_formatter/README_EN.md).
+
+- **Enhance generic type inference**: Improved the generic type inference algorithm to better handle complex scenarios, such as nested generics and recursive types.
+
+- **Update dependencies**: Updated various dependencies to their latest versions, update luars to 0.19.0.
+
+- **Optimize performance**: Made several optimizations to improve the overall performance of the language server, including flow analyzis
+
+### 🐛 Fixed
+
+- Fix luajit complex number parsing issue
+- Fix local function semantic token
+- Fix compact luals type grammar fun(...):...
+
+## [0.22.0] - 2026-4-1
+
+### ✨ Added
+
+- **Support for `@return_overload` annotation**: Added support for `@return_overload` , which allow you define function return like pcall
+```lua
+---@return_overload true, string
+---@return_overload false, integer
+local function func()
+end
+```
+then the two variables in `local ok, res = func()` will be correctly inferred as `ok: true, res: string` and `ok: false, res: integer` respectively.
+
+- **Ready for New Formatter**: The language server plans to introduce a new formatter in version 0.23.0. This formatter can currently be experienced in CLI mode. You can download the latest formatter `luafmt` from the release page. For related documentation, please refer to [EmmyLua Formatter Documentation Index](docs/emmylua_formatter/README_EN.md). This formatting tool draws inspiration from Prettier while maintaining more style options from EmmyLua CodeStyle. After replacing the original formatter, emmylua_ls will no longer depend on high-version C++ compilers, and formatting results will be more stable. However, there are still some edge cases with suboptimal formatting, which will be continuously fixed in subsequent versions.
+
+### 🔧 Changed
+
+- **Update luars to 0.17.0**: Updated the `luars` dependency to version 0.17.0.
+- **Improve performance**: Properly improved performance through a series of measures
+
+### 🐛 Fixed
+
+Fix some bugs
+
+## [0.21.0] - 2026-3-6
+
+### ✨ Added
+
+- **Support @schema url annotation**: Added support for `@schema` annotation,
+which can be use to add completion and hover for json-schema-defined APIs. For example:
+```lua
+---@schema https://raw.githubusercontent.com/EmmyLuaLs/emmylua-analyzer-rust/refs/heads/main/crates/emmylua_code_analysis/resources/schema.json
+local c = {
+  -- will suggest `diagnostics` and more
+}
+
+```
+
+### 🔧 Changed
+
+- **Update luars to 0.14.2**: Updated the `luars` dependency to version 0.14.2, which includes various bug fixes and improvements to Lua parsing and execution.
+
+### 🐛 Fixed
+
+- fix package.searchpath returns nil+error if none succeeds
+- fix module recursive
+- fix shebang support
+- fix global declaration support
+- fix select(n, func()) correctly narrows type when func returns multiple values
+- fix resolve alias-call returns and simplify flow assignments
+- fix the next returned by pairs should accept 2 arguments
+- fix enforce segment-boundary fuzzy require matching
+- fix stabilize fuzzy require resolution across duplicate suffix matches
+- fix package.searchpath returns nil+error if none succeeds
+- fix lua5.5 named vararg support: donot report syntax-error
+
 ## [0.20.0] - 2026-1-30
 ### ✨ Added
 - **Support .emmyrc.lua configuration file**: The language server and emmylua_check now support loading configuration from `.emmyrc.lua` in addition to `.emmyrc.json` and `.luarc.json`. Lua configuration is parsed using the [luars](https://github.com/CppCXY/lua-rs) library. A basic config looks like:

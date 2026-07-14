@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod test {
+    use hashbrown::HashSet;
     use std::sync::Arc;
 
     use crate::{LuaType, LuaUnionType, VirtualWorkspace};
@@ -102,6 +103,146 @@ mod test {
         let b = ws.expr_ty("b");
         assert_eq!(a, LuaType::String);
         assert_eq!(b, LuaType::Integer);
+    }
+
+    #[test]
+    fn test_enum_key_pairs() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        ws.def(
+            r#"
+            --- @enum Severity
+            local severity = {
+                ERROR = 1,
+                WARN = 2,
+                INFO = 3,
+                HINT = 4,
+            }
+
+            local severities = {
+                [severity.ERROR] = 1,
+                [severity.WARN] = 2,
+                [severity.INFO] = 3,
+                [severity.HINT] = 4,
+            }
+
+            for k in pairs(severities) do
+                key = k
+            end
+        "#,
+        );
+
+        let key_ty = ws.expr_ty("key");
+        let LuaType::Union(union) = key_ty else {
+            panic!("expected enum key union, got {:?}", key_ty);
+        };
+        let set = union.into_set();
+        let expected: HashSet<_> = vec![
+            LuaType::IntegerConst(1),
+            LuaType::IntegerConst(2),
+            LuaType::IntegerConst(3),
+            LuaType::IntegerConst(4),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(set, expected);
+    }
+
+    #[test]
+    fn test_pairs_expr_key_type() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        ws.def(
+            r#"
+            local key = tostring(1)
+            local t = {
+                [key] = 1,
+            }
+
+            for k in pairs(t) do
+                key_out = k
+            end
+        "#,
+        );
+
+        assert_eq!(ws.expr_ty("key_out"), LuaType::String);
+    }
+
+    #[test]
+    fn test_pairs_value_field_integer_keys() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        ws.def(
+            r#"
+            local t = { 10, 20, 30 }
+
+            for k, v in pairs(t) do
+                key_out = k
+                value_out = v
+            end
+        "#,
+        );
+
+        let key_out = ws.expr_ty("key_out");
+        let value_out = ws.expr_ty("value_out");
+        let LuaType::Union(key_union) = key_out else {
+            panic!("expected integer key union, got {:?}", key_out);
+        };
+        let LuaType::Union(value_union) = value_out else {
+            panic!("expected value union, got {:?}", value_out);
+        };
+
+        let expected_keys: HashSet<_> = vec![
+            LuaType::IntegerConst(1),
+            LuaType::IntegerConst(2),
+            LuaType::IntegerConst(3),
+        ]
+        .into_iter()
+        .collect();
+        let expected_values: HashSet<_> = vec![
+            LuaType::DocIntegerConst(10),
+            LuaType::DocIntegerConst(20),
+            LuaType::DocIntegerConst(30),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(key_union.into_set(), expected_keys);
+        assert_eq!(value_union.into_set(), expected_values);
+    }
+
+    #[test]
+    fn test_pairs_self_iterator_method_does_not_recurse() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        ws.def(
+            r#"
+            ---@class Base
+            local base = {}
+            function base:iter()
+                return pairs(self)
+            end
+
+            ---@generic T
+            ---@param e T
+            ---@return T | Base
+            function Enum(e)
+            end
+
+            local Event = Enum {
+                A = 1,
+                B = 2,
+            }
+
+            for k, v in Event:iter() do
+                key_out = k
+                value_out = v
+            end
+        "#,
+        );
+
+        let _ = ws.expr_ty("key_out");
+        let _ = ws.expr_ty("value_out");
     }
 
     #[test]

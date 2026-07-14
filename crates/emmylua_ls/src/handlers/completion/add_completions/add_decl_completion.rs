@@ -1,5 +1,5 @@
-use emmylua_code_analysis::{DbIndex, LuaDeclId, LuaSemanticDeclId, LuaType};
-use lsp_types::{CompletionItem, InsertTextFormat};
+use emmylua_code_analysis::{LuaDeclId, LuaSemanticDeclId, LuaType};
+use lsp_types::CompletionItem;
 
 use crate::handlers::completion::{
     add_completions::get_function_snippet, completion_builder::CompletionBuilder,
@@ -17,8 +17,6 @@ pub fn add_decl_completion(
     let property_owner = LuaSemanticDeclId::LuaDecl(decl_id);
     check_visibility(builder, property_owner.clone())?;
 
-    let overload_count = count_function_overloads(builder.semantic_model.get_db(), typ);
-
     let emmyrc = builder.semantic_model.get_emmyrc();
     let insert_text = get_function_insert_text(
         builder,
@@ -27,7 +25,6 @@ pub fn add_decl_completion(
         emmyrc.completion.function_completion_need_parentheses,
         typ,
     );
-
     let mut completion_item = CompletionItem {
         label: name.to_string(),
         kind: Some(get_completion_kind(typ)),
@@ -35,7 +32,7 @@ pub fn add_decl_completion(
         insert_text: Some(insert_text),
         data: CompletionData::from_property_owner_id(builder, decl_id.into(), overload_count),
         label_details: Some(lsp_types::CompletionItemLabelDetails {
-            detail: get_detail(builder, typ, CallDisplay::None),
+            detail: get_detail(builder, typ, CallDisplay::None, false),
             description: get_description(builder, typ),
         }),
         ..Default::default()
@@ -54,24 +51,4 @@ pub fn add_decl_completion(
 
     builder.add_completion_item(completion_item)?;
     Some(())
-}
-
-fn count_function_overloads(db: &DbIndex, typ: &LuaType) -> Option<usize> {
-    let mut count = 0;
-    match typ {
-        LuaType::DocFunction(_) => {
-            count += 1;
-        }
-        LuaType::Signature(id) => {
-            count += 1;
-            if let Some(signature) = db.get_signature_index().get(id) {
-                count += signature.overloads.len();
-            }
-        }
-        _ => {}
-    }
-    if count > 1 {
-        count -= 1;
-    }
-    if count == 0 { None } else { Some(count) }
 }

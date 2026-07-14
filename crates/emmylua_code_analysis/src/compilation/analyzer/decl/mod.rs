@@ -107,9 +107,6 @@ fn walk_node_enter(analyzer: &mut DeclAnalyzer, node: LuaAst) {
         LuaAst::LuaDocTagAlias(doc_tag) => {
             docs::analyze_doc_tag_alias(analyzer, doc_tag);
         }
-        LuaAst::LuaDocTagAttribute(doc_tag) => {
-            docs::analyze_doc_tag_attribute(analyzer, doc_tag);
-        }
         LuaAst::LuaDocTagNamespace(doc_tag) => {
             docs::analyze_doc_tag_namespace(analyzer, doc_tag);
         }
@@ -142,6 +139,7 @@ fn is_scope_owner(node: &LuaAst) -> bool {
             | LuaSyntaxKind::FuncStat
             | LuaSyntaxKind::LocalFuncStat
             | LuaSyntaxKind::AssignStat
+            | LuaSyntaxKind::ConstStat
     )
 }
 

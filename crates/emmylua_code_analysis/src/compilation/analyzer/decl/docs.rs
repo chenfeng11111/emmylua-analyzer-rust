@@ -1,14 +1,13 @@
 use emmylua_parser::{
-    LuaAstNode, LuaAstToken, LuaComment, LuaDocTag, LuaDocTagAlias, LuaDocTagAttribute,
-    LuaDocTagClass, LuaDocTagEnum, LuaDocTagMeta, LuaDocTagNamespace, LuaDocTagUsing,
-    LuaDocTypeFlag,
+    LuaAstNode, LuaAstToken, LuaComment, LuaDocTag, LuaDocTagAlias, LuaDocTagClass, LuaDocTagEnum,
+    LuaDocTagMeta, LuaDocTagNamespace, LuaDocTagUsing, LuaDocTypeFlag,
 };
 use flagset::FlagSet;
 use rowan::TextRange;
 
 use crate::{
-    LuaTypeDecl, LuaTypeDeclId,
-    db_index::{LuaDeclTypeKind, LuaTypeFlag},
+    LuaTypeDecl, LuaTypeDeclId, ModuleVisibility,
+    db_index::{LuaDeclTypeKind, LuaTypeFlag, WorkspaceId},
 };
 
 use super::DeclAnalyzer;
@@ -19,7 +18,15 @@ pub fn analyze_doc_tag_class(analyzer: &mut DeclAnalyzer, class: LuaDocTagClass)
     let range = name_token.syntax().text_range();
     let type_flag = get_type_flag_value(analyzer, class.get_type_flag());
 
-    add_type_decl(analyzer, &name, range, LuaDeclTypeKind::Class, type_flag);
+    let decl_id = add_type_decl(analyzer, &name, range, LuaDeclTypeKind::Class, type_flag);
+    if let Some(generic_decl) = class.get_generic_decl() {
+        analyzer.context.add_pending_type_generic_header(
+            analyzer.get_file_id(),
+            decl_id,
+            generic_decl,
+        );
+    }
+
     Some(())
 }
 
@@ -30,7 +37,7 @@ fn get_type_flag_value(
     let mut attr: FlagSet<LuaTypeFlag> = if analyzer.is_meta {
         LuaTypeFlag::Meta.into()
     } else {
-        LuaTypeFlag::None.into()
+        FlagSet::default()
     };
 
     if let Some(flag) = flag {
@@ -48,8 +55,14 @@ fn get_type_flag_value(
                 "constructor" => {
                     attr |= LuaTypeFlag::Constructor;
                 }
-                "private" => {
-                    attr |= LuaTypeFlag::Private;
+                "public" => {
+                    attr |= LuaTypeFlag::Public;
+                }
+                "internal" => {
+                    attr |= LuaTypeFlag::Internal;
+                }
+                "private" | "file" => {
+                    attr |= LuaTypeFlag::File;
                 }
                 _ => {}
             }
@@ -74,25 +87,15 @@ pub fn analyze_doc_tag_alias(analyzer: &mut DeclAnalyzer, alias: LuaDocTagAlias)
     let name = name_token.get_name_text().to_string();
     let range = name_token.syntax().text_range();
     let type_flag = get_type_flag_value(analyzer, alias.get_type_flag());
-    add_type_decl(analyzer, &name, range, LuaDeclTypeKind::Alias, type_flag);
-    Some(())
-}
+    let decl_id = add_type_decl(analyzer, &name, range, LuaDeclTypeKind::Alias, type_flag);
+    if let Some(generic_decl) = alias.get_generic_decl_list() {
+        analyzer.context.add_pending_type_generic_header(
+            analyzer.get_file_id(),
+            decl_id,
+            generic_decl,
+        );
+    }
 
-pub fn analyze_doc_tag_attribute(
-    analyzer: &mut DeclAnalyzer,
-    attribute: LuaDocTagAttribute,
-) -> Option<()> {
-    let name_token = attribute.get_name_token()?;
-    let name = name_token.get_name_text().to_string();
-    let range = name_token.syntax().text_range();
-
-    add_type_decl(
-        analyzer,
-        &name,
-        range,
-        LuaDeclTypeKind::Attribute,
-        LuaTypeFlag::None.into(),
-    );
     Some(())
 }
 
@@ -136,7 +139,7 @@ pub fn analyze_doc_tag_meta(analyzer: &mut DeclAnalyzer, tag: LuaDocTagMeta) -> 
             analyzer
                 .db
                 .get_module_index_mut()
-                .set_module_visibility(file_id, false);
+                .set_module_visibility(file_id, ModuleVisibility::Hide);
         } else {
             let workspace_id = analyzer
                 .db
@@ -181,8 +184,14 @@ fn add_type_decl(
     range: TextRange,
     kind: LuaDeclTypeKind,
     flag: FlagSet<LuaTypeFlag>,
-) {
+) -> LuaTypeDeclId {
     let file_id = analyzer.get_file_id();
+    let workspace_id = analyzer
+        .db
+        .get_module_index()
+        .get_workspace_id(file_id)
+        .or(analyzer.context.workspace_id)
+        .unwrap_or(WorkspaceId::MAIN);
     let type_index = analyzer.db.get_type_index_mut();
 
     let basic_name = name;
@@ -190,14 +199,25 @@ fn add_type_decl(
     let full_name = option_namespace
         .map(|ns| format!("{}.{}", ns, basic_name))
         .unwrap_or(basic_name.to_string());
-    let id = if flag.contains(LuaTypeFlag::Private) {
-        LuaTypeDeclId::local(file_id, &full_name)
+    let id = if flag.contains(LuaTypeFlag::File) {
+        LuaTypeDeclId::file(file_id, &full_name)
+    } else if flag.contains(LuaTypeFlag::Internal) {
+        LuaTypeDeclId::internal(workspace_id, &full_name)
     } else {
         LuaTypeDeclId::global(&full_name)
     };
     let simple_name = id.get_simple_name();
     type_index.add_type_decl(
         file_id,
-        LuaTypeDecl::new(file_id, range, simple_name.to_string(), kind, flag, id),
+        LuaTypeDecl::new(
+            file_id,
+            range,
+            simple_name.to_string(),
+            kind,
+            flag,
+            id.clone(),
+        ),
     );
+
+    id
 }

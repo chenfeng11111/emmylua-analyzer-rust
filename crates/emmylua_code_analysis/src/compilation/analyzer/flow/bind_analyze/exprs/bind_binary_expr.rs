@@ -1,4 +1,4 @@
-use emmylua_parser::{BinaryOperator, LuaAst, LuaBinaryExpr, LuaExpr};
+use emmylua_parser::{BinaryOperator, LuaAst, LuaBinaryExpr, LuaExpr, UnaryOperator};
 
 use crate::{
     FlowId,
@@ -18,6 +18,7 @@ pub fn bind_binary_expr(
     match op_token.get_op() {
         BinaryOperator::OpAnd => bind_and_expr(binder, binary_expr, current),
         BinaryOperator::OpOr => bind_or_expr(binder, binary_expr, current),
+        BinaryOperator::OpNilCoalescing => bind_or_expr(binder, binary_expr, current),
         _ => {
             bind_each_child(binder, LuaAst::LuaBinaryExpr(binary_expr.clone()), current);
             Some(())
@@ -74,11 +75,19 @@ pub fn is_binary_logical(expr: &LuaExpr) -> bool {
 
             return matches!(
                 op_token.get_op(),
-                BinaryOperator::OpAnd | BinaryOperator::OpOr
+                BinaryOperator::OpAnd | BinaryOperator::OpOr | BinaryOperator::OpNilCoalescing
             );
         }
         LuaExpr::ParenExpr(paren_expr) => {
             if let Some(inner_expr) = paren_expr.get_expr() {
+                return is_binary_logical(&inner_expr);
+            }
+        }
+        LuaExpr::UnaryExpr(unary_expr) => {
+            let is_not = unary_expr
+                .get_op_token()
+                .is_some_and(|op| op.get_op() == UnaryOperator::OpNot);
+            if is_not && let Some(inner_expr) = unary_expr.get_expr() {
                 return is_binary_logical(&inner_expr);
             }
         }

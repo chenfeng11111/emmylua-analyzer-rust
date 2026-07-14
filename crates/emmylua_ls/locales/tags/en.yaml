@@ -218,20 +218,6 @@ tags.readonly: |
   ---@readonly
   MyClass.readonlyField = "constant"
   ```
-tags.export: |
-  The `export` tag is used to indicate that a variable is exported, supporting quick import.
-  It accepts `namespace` or `global` as parameters. If no parameter is provided, it defaults to `global`.
-  Example:
-  ```lua
-  ---@export namespace -- When set to `namespace`, only allows import within the same namespace
-  local export = {}
-
-  export.func = function()
-    -- When typing `func` in other files, import suggestions will be shown
-  end
-
-  return export
-  ```
 tags.language: |
   The `language` tag is used to specify language injection for code blocks.
   Example:
@@ -244,16 +230,4 @@ tags.language: |
       DELETE FROM users WHERE id = 2;
       INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com');
   ]]
-  ```
-tags.attribute: |
-  `attribute` tag defines an attribute. Attribute is used to attach extra information to a definition.
-  Example:
-  ```lua
-  ---@attribute deprecated(message: string?)
-
-  ---@class A
-  ---@[deprecated("delete")] # `b` field is marked as deprecated
-  ---@field b string
-  ---@[deprecated] # If `attribute` allows no parameters, the parentheses can be omitted
-  ---@field c string
   ```

@@ -1,19 +1,19 @@
 use std::sync::Arc;
 
 use emmylua_parser::{
-    LuaAstNode, LuaDocAttributeType, LuaDocBinaryType, LuaDocDescriptionOwner, LuaDocFuncType,
-    LuaDocGenericType, LuaDocMultiLineUnionType, LuaDocObjectFieldKey, LuaDocObjectType,
-    LuaDocStrTplType, LuaDocType, LuaDocUnaryType, LuaDocVariadicType, LuaLiteralToken,
-    LuaSyntaxKind, LuaTypeBinaryOperator, LuaTypeUnaryOperator, NumberResult,
+    LuaAstNode, LuaDocBinaryType, LuaDocDescriptionOwner, LuaDocFuncType, LuaDocGenericType,
+    LuaDocMultiLineUnionType, LuaDocObjectFieldKey, LuaDocObjectType, LuaDocStrTplType, LuaDocType,
+    LuaDocUnaryType, LuaDocVariadicType, LuaLiteralToken, LuaSyntaxKind, LuaTypeBinaryOperator,
+    LuaTypeUnaryOperator, NumberResult,
 };
 use rowan::TextRange;
 use smol_str::SmolStr;
 
 use crate::{
     AsyncState, DbIndex, FileId, InFiled, LuaAliasCallKind, LuaAliasCallType, LuaArrayLen,
-    LuaArrayType, LuaAttributeType, LuaFunctionType, LuaGenericType, LuaIndexAccessKey,
-    LuaIntersectionType, LuaMultiLineUnion, LuaObjectType, LuaStringTplType, LuaTupleStatus,
-    LuaTupleType, LuaType, LuaTypeDeclId, TypeOps, VariadicType,
+    LuaArrayType, LuaFunctionType, LuaGenericType, LuaIndexAccessKey, LuaIntersectionType,
+    LuaMultiLineUnion, LuaObjectType, LuaStringTplType, LuaTupleStatus, LuaTupleType, LuaType,
+    LuaTypeDeclId, TypeOps, VariadicType, complete_type_generic_args,
 };
 
 #[derive(Clone, Copy)]
@@ -115,9 +115,6 @@ pub fn infer_doc_type(ctx: DocTypeInferContext<'_>, node: &LuaDocType) -> LuaTyp
         LuaDocType::MultiLineUnion(multi_union) => {
             return infer_multi_line_union_type(ctx, multi_union);
         }
-        LuaDocType::Attribute(attribute_type) => {
-            return infer_attribute_type(ctx, attribute_type);
-        }
         _ => {}
     }
     LuaType::Unknown
@@ -152,15 +149,32 @@ fn infer_buildin_or_ref_type(
         }
         _ => {
             let file_id = ctx.file_id;
+            let workspace_id = ctx.db.resolve_workspace_id(file_id);
             let type_id = if let Some(name_type_decl) =
-                ctx.db.get_type_index().find_type_decl(file_id, name)
+                ctx.db
+                    .get_type_index()
+                    .find_type_decl(file_id, name, workspace_id)
             {
                 name_type_decl.get_id()
             } else {
                 LuaTypeDeclId::global(name)
             };
 
-            LuaType::Ref(type_id)
+            if ctx
+                .db
+                .get_type_index()
+                .get_generic_params(&type_id)
+                .is_some_and(|generic_params| !generic_params.is_empty())
+            {
+                let completion = complete_type_generic_args(ctx.db, &type_id, Vec::new());
+                if let Some(completed_args) = completion.completed_args {
+                    LuaType::Generic(LuaGenericType::new(type_id, completed_args).into())
+                } else {
+                    LuaType::Any
+                }
+            } else {
+                LuaType::Ref(type_id)
+            }
         }
     }
 }
@@ -193,12 +207,16 @@ fn infer_generic_type(ctx: DocTypeInferContext<'_>, generic_type: &LuaDocGeneric
         }
 
         let file_id = ctx.file_id;
-        let id =
-            if let Some(name_type_decl) = ctx.db.get_type_index().find_type_decl(file_id, &name) {
-                name_type_decl.get_id()
-            } else {
-                return LuaType::Unknown;
-            };
+        let workspace_id = ctx.db.resolve_workspace_id(file_id);
+        let id = if let Some(name_type_decl) =
+            ctx.db
+                .get_type_index()
+                .find_type_decl(file_id, &name, workspace_id)
+        {
+            name_type_decl.get_id()
+        } else {
+            return LuaType::Unknown;
+        };
 
         let mut generic_params = Vec::new();
         if let Some(generic_decl_list) = generic_type.get_generic_types() {
@@ -211,7 +229,12 @@ fn infer_generic_type(ctx: DocTypeInferContext<'_>, generic_type: &LuaDocGeneric
             }
         }
 
-        return LuaType::Generic(LuaGenericType::new(id, generic_params).into());
+        let completion = complete_type_generic_args(ctx.db, &id, generic_params);
+        if let Some(completed_args) = completion.completed_args {
+            return LuaType::Generic(LuaGenericType::new(id, completed_args).into());
+        }
+
+        return LuaType::Any;
     }
 
     LuaType::Unknown
@@ -298,13 +321,6 @@ fn infer_binary_type(ctx: DocTypeInferContext<'_>, binary_type: &LuaDocBinaryTyp
     if let Some((left, right)) = binary_type.get_types() {
         let left_type = infer_doc_type(ctx, &left);
         let right_type = infer_doc_type(ctx, &right);
-        if left_type.is_unknown() {
-            return right_type;
-        }
-        if right_type.is_unknown() {
-            return left_type;
-        }
-
         if let Some(op) = binary_type.get_op_token() {
             match op.get_op() {
                 LuaTypeBinaryOperator::Union => match (left_type, right_type) {
@@ -478,6 +494,7 @@ fn infer_func_type(ctx: DocTypeInferContext<'_>, func: &LuaDocFuncType) -> LuaTy
             is_variadic,
             params_result,
             return_type,
+            None,
         )
         .into(),
     )
@@ -592,36 +609,4 @@ fn infer_multi_line_union_type(
     }
 
     LuaType::MultiLineUnion(LuaMultiLineUnion::new(union_members).into())
-}
-
-fn infer_attribute_type(
-    ctx: DocTypeInferContext<'_>,
-    attribute_type: &LuaDocAttributeType,
-) -> LuaType {
-    let mut params_result = Vec::new();
-    for param in attribute_type.get_params() {
-        let name = if let Some(param) = param.get_name_token() {
-            param.get_name_text().to_string()
-        } else if param.is_dots() {
-            "...".to_string()
-        } else {
-            continue;
-        };
-
-        let nullable = param.is_nullable();
-
-        let type_ref = if let Some(type_ref) = param.get_type() {
-            let mut typ = infer_doc_type(ctx, &type_ref);
-            if nullable && !typ.is_nullable() {
-                typ = TypeOps::Union.apply(ctx.db, &typ, &LuaType::Nil);
-            }
-            Some(typ)
-        } else {
-            None
-        };
-
-        params_result.push((name, type_ref));
-    }
-
-    LuaType::DocAttribute(LuaAttributeType::new(params_result).into())
 }

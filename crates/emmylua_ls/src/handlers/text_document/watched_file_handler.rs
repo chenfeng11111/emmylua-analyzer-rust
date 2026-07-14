@@ -29,7 +29,7 @@ pub async fn on_did_change_watched_files(
                     continue;
                 }
 
-                if !workspace.current_open_files.contains(&file_event.uri) {
+                if !workspace.is_open_file(&file_event.uri) {
                     if !workspace.is_workspace_file(&file_event.uri) {
                         continue;
                     }
@@ -42,29 +42,16 @@ pub async fn on_did_change_watched_files(
                     );
                 }
             }
-            Some(WatchedFileType::Editorconfig) => {
-                if file_event.typ == FileChangeType::DELETED {
-                    continue;
-                }
-                let editorconfig_path = uri_to_file_path(&file_event.uri).unwrap();
-                context
-                    .workspace_manager()
-                    .read()
-                    .await
-                    .update_editorconfig(editorconfig_path);
-            }
             Some(WatchedFileType::Emmyrc) => {
                 if file_event.typ == FileChangeType::DELETED {
                     continue;
                 }
-                let emmyrc_path = uri_to_file_path(&file_event.uri).unwrap();
-                let file_dir = emmyrc_path.parent().unwrap().to_path_buf();
+                let config_path = uri_to_file_path(&file_event.uri).unwrap();
                 context
                     .workspace_manager()
                     .read()
                     .await
-                    .add_update_emmyrc_task(file_dir)
-                    .await;
+                    .add_update_emmyrc_task(context.clone(), config_path);
             }
             None => {}
         }
@@ -101,7 +88,6 @@ fn collect_lua_files(
 
 enum WatchedFileType {
     Lua,
-    Editorconfig,
     Emmyrc,
 }
 
@@ -109,7 +95,6 @@ fn get_file_type(uri: &Uri) -> Option<WatchedFileType> {
     let path = uri_to_file_path(uri)?;
     let file_name = path.file_name()?.to_str()?;
     match file_name {
-        ".editorconfig" => Some(WatchedFileType::Editorconfig),
         ".emmyrc.json" | ".luarc.json" | ".emmyrc.lua" => Some(WatchedFileType::Emmyrc),
         _ => Some(WatchedFileType::Lua),
     }

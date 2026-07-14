@@ -71,10 +71,9 @@ fn infer_union_binary_expr(
         return None;
     };
 
-    let mut result = LuaType::Unknown;
+    let mut result = None;
     let types = u.into_vec();
     for ty in types.iter() {
-        // 只在实际调用时才 clone，而不是预先 clone
         let ty_result = if is_left_union {
             infer_binary_expr_type(db, ty.clone(), other.clone(), op)
         } else {
@@ -82,10 +81,13 @@ fn infer_union_binary_expr(
         };
 
         if let Ok(ty) = ty_result {
-            result = TypeOps::Union.apply(db, &result, &ty);
+            result = Some(match result {
+                Some(result) => TypeOps::Union.apply(db, &result, &ty),
+                None => ty,
+            });
         }
     }
-    Some(result)
+    Some(result.unwrap_or(LuaType::Unknown))
 }
 
 fn infer_binary_expr_type(
@@ -110,6 +112,9 @@ fn infer_binary_expr_type(
         BinaryOperator::OpConcat => infer_binary_expr_concat(db, left_type, right_type),
         BinaryOperator::OpOr => infer_binary_expr_or(db, left_type, right_type),
         BinaryOperator::OpAnd => infer_binary_expr_and(db, left_type, right_type),
+        BinaryOperator::OpNilCoalescing => {
+            infer_binary_expr_nil_coalescing(db, left_type, right_type)
+        }
         BinaryOperator::OpLt
         | BinaryOperator::OpLe
         | BinaryOperator::OpGt
@@ -394,9 +399,9 @@ fn infer_binary_expr_bxor(db: &DbIndex, left: LuaType, right: LuaType) -> InferR
 fn infer_binary_expr_shl(db: &DbIndex, left: LuaType, right: LuaType) -> InferResult {
     if left.is_integer() && right.is_integer() {
         return match (&left, &right) {
-            (LuaType::IntegerConst(int1), LuaType::IntegerConst(int2)) => {
-                Ok(LuaType::IntegerConst(int1 << int2))
-            }
+            (LuaType::IntegerConst(int1), LuaType::IntegerConst(int2)) => Ok(
+                LuaType::IntegerConst(int1.checked_shl(*int2 as u32).unwrap_or(0)),
+            ),
             _ => Ok(LuaType::Integer),
         };
     }
@@ -407,9 +412,9 @@ fn infer_binary_expr_shl(db: &DbIndex, left: LuaType, right: LuaType) -> InferRe
 fn infer_binary_expr_shr(db: &DbIndex, left: LuaType, right: LuaType) -> InferResult {
     if left.is_integer() && right.is_integer() {
         return match (&left, &right) {
-            (LuaType::IntegerConst(int1), LuaType::IntegerConst(int2)) => {
-                Ok(LuaType::IntegerConst(int1 >> int2))
-            }
+            (LuaType::IntegerConst(int1), LuaType::IntegerConst(int2)) => Ok(
+                LuaType::IntegerConst(int1.checked_shr(*int2 as u32).unwrap_or(0)),
+            ),
             _ => Ok(LuaType::Integer),
         };
     }
@@ -533,4 +538,21 @@ fn float_cmp(left: f64, right: f64, op: BinaryOperator) -> bool {
         BinaryOperator::OpNe => left != right,
         _ => false,
     }
+}
+
+fn infer_binary_expr_nil_coalescing(db: &DbIndex, left: LuaType, right: LuaType) -> InferResult {
+    if left.is_nil() || left.is_any() || left.is_unknown() {
+        return Ok(right);
+    }
+
+    if right.is_nil() || right.is_any() || right.is_unknown() {
+        return Ok(left);
+    }
+
+    let left_without_nil = TypeOps::Remove.apply(db, &left, &LuaType::Nil);
+    if left_without_nil.is_unknown() {
+        return Ok(right);
+    }
+
+    Ok(TypeOps::Union.apply(db, &left_without_nil, &right))
 }

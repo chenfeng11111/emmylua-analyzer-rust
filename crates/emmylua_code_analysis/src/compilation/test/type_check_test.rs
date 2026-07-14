@@ -7,7 +7,7 @@ mod test {
     fn test_issue_421() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::AssignTypeMismatch,
             r#"
         local a         --- @type string?
@@ -22,7 +22,7 @@ mod test {
     fn test_issue_645() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
         --- @alias Dir -1|1
@@ -32,6 +32,42 @@ mod test {
 
         foo(1)
         "#,
+        ));
+    }
+
+    #[test]
+    fn test_issue_925() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::TypeNotFound,
+            r#"
+            ---@alias Pick<T, K extends keyof T> { [P in K]: T[P]; }
+        "#,
+        ));
+    }
+
+    #[test]
+    fn test_enum_flag_bitop_assignment_keeps_later_assign_check() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::AssignTypeMismatch,
+            r#"
+            ---@enum SubscriberFlags
+            local SubscriberFlags = {
+                Tracking = 1 << 0
+            }
+
+            ---@class Subscriber
+            ---@field flags SubscriberFlags
+
+            ---@type Subscriber
+            local subscriber
+
+            subscriber.flags = subscriber.flags & ~SubscriberFlags.Tracking
+            subscriber.flags = 9
+            "#,
         ));
     }
 }

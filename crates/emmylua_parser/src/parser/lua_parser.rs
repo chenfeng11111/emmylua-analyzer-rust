@@ -23,6 +23,9 @@ pub struct LuaParser<'a> {
     mark_level: usize,
     pub parse_config: ParserConfig<'a>,
     pub(crate) errors: &'a mut Vec<LuaParseError>,
+    ternary_depth: usize,
+    paren_depth: usize,
+    ternary_paren_depth: usize,
 }
 
 impl MarkerEventContainer for LuaParser<'_> {
@@ -61,6 +64,9 @@ impl<'a> LuaParser<'a> {
             parse_config: config,
             mark_level: 0,
             errors: &mut errors,
+            ternary_depth: 0,
+            paren_depth: 0,
+            ternary_paren_depth: 0,
         };
 
         parse_chunk(&mut parser);
@@ -178,6 +184,48 @@ impl<'a> LuaParser<'a> {
         } else {
             self.tokens[next_index].kind
         }
+    }
+
+    pub fn peek_nth_token(&self, n: usize) -> LuaTokenKind {
+        let mut index = self.token_index;
+        for _ in 0..=n {
+            index += 1;
+            self.skip_trivia(&mut index);
+        }
+        if index >= self.tokens.len() {
+            LuaTokenKind::None
+        } else {
+            self.tokens[index].kind
+        }
+    }
+
+    pub fn enter_ternary(&mut self) {
+        self.ternary_paren_depth = self.paren_depth;
+        self.ternary_depth += 1;
+    }
+
+    pub fn leave_ternary(&mut self) {
+        self.ternary_depth = self.ternary_depth.saturating_sub(1);
+    }
+
+    pub fn inside_ternary_branch(&self) -> bool {
+        self.ternary_depth > 0
+    }
+
+    pub fn enter_paren(&mut self) {
+        self.paren_depth += 1;
+    }
+
+    pub fn leave_paren(&mut self) {
+        self.paren_depth = self.paren_depth.saturating_sub(1);
+    }
+
+    pub fn inside_paren(&self) -> bool {
+        self.paren_depth > 0
+    }
+
+    pub fn paren_depth_exceeds_ternary_ref(&self) -> bool {
+        self.paren_depth > self.ternary_paren_depth
     }
 
     fn skip_trivia(&self, index: &mut usize) {
@@ -351,6 +399,7 @@ fn is_invalid_kind(kind: LuaTokenKind) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::grammar::parse_chunk;
     use crate::text::Reader;
     use crate::{
         LuaParser, kind::LuaTokenKind, lexer::LuaLexer, parser::ParserConfig,
@@ -385,6 +434,9 @@ mod tests {
             parse_config: config,
             mark_level: 0,
             errors,
+            ternary_depth: 0,
+            paren_depth: 0,
+            ternary_paren_depth: 0,
         };
         parser.init();
 
@@ -432,5 +484,41 @@ mod tests {
 
         let tree = LuaParser::parse(lua_code, ParserConfig::default());
         println!("{:#?}", tree.get_red_root());
+    }
+
+    #[test]
+    fn test_invalid_suffixed_expr_keeps_mark_level_balanced() {
+        let lua_code = r#"
+
+function MyClass:Test1(data)
+    if self.nId == 123 and self. then
+
+    end
+    print("Test1")
+end"#;
+        let mut errors = Vec::new();
+        let mut parser = new_parser(lua_code, ParserConfig::default(), &mut errors, false);
+
+        parse_chunk(&mut parser);
+
+        assert_eq!(parser.mark_level, 0);
+    }
+
+    #[test]
+    fn test_invalid_suffixed_expr_still_builds_recoverable_tree() {
+        let lua_code = r#"
+
+function MyClass:Test1(data)
+    if self.nId == 123 and self. then
+
+    end
+    print("Test1")
+end"#;
+
+        let tree = LuaParser::parse(lua_code, ParserConfig::default());
+        let result = format!("{:#?}", tree.get_red_root());
+
+        assert!(result.contains("Syntax(FuncStat)"));
+        assert!(result.contains("Syntax(IfStat)"));
     }
 }

@@ -4,8 +4,8 @@ use emmylua_parser::{LuaAstNode, LuaIndexMemberExpr, LuaTableExpr, LuaVarExpr};
 
 use crate::{
     DbIndex, InferFailReason, InferGuard, InferGuardRef, LuaDocParamInfo, LuaDocReturnInfo,
-    LuaFunctionType, LuaInferCache, LuaSignature, LuaType, SignatureReturnStatus, TypeOps,
-    get_real_type, infer_call_expr_func, infer_expr, infer_table_should_be,
+    LuaFunctionType, LuaInferCache, LuaMemberId, LuaSignature, LuaType, SignatureReturnStatus,
+    TypeOps, get_real_type, infer_call_expr_func, infer_expr, infer_table_should_be,
 };
 
 use super::{
@@ -187,7 +187,7 @@ fn try_convert_to_func_body_infer(
     let mut unresolve = UnResolveReturn {
         file_id: closure_return.file_id,
         signature_id: closure_return.signature_id,
-        return_points: closure_return.return_points.clone(),
+        body: closure_return.body.clone(),
     };
 
     try_resolve_return_point(db, cache, &mut unresolve)
@@ -205,7 +205,7 @@ pub fn try_resolve_closure_parent_params(
     if !signature.param_docs.is_empty() {
         return Ok(());
     }
-    let self_type;
+    let mut self_type = None;
     let member_type = match &closure_params.parent_ast {
         UnResolveParentAst::LuaFuncStat(func_stat) => {
             let func_name = func_stat.get_func_name().ok_or(InferFailReason::None)?;
@@ -227,19 +227,36 @@ pub fn try_resolve_closure_parent_params(
             }
         }
         UnResolveParentAst::LuaTableField(table_field) => {
-            let parnet_table_expr = table_field
-                .get_parent::<LuaTableExpr>()
-                .ok_or(InferFailReason::None)?;
-            let parent_table_type = infer_table_should_be(db, cache, parnet_table_expr)?;
-            self_type = Some(parent_table_type.clone());
-            find_best_function_type(
-                db,
-                cache,
-                &parent_table_type,
-                LuaIndexMemberExpr::TableField(table_field.clone()),
-                signature,
-            )
-            .ok_or(InferFailReason::None)?
+            let parent_member_type = if let Some(parent_table_expr) =
+                table_field.get_parent::<LuaTableExpr>()
+            {
+                if let Ok(parent_table_type) = infer_table_should_be(db, cache, parent_table_expr) {
+                    self_type = Some(parent_table_type.clone());
+                    find_best_function_type(
+                        db,
+                        cache,
+                        &parent_table_type,
+                        LuaIndexMemberExpr::TableField(table_field.clone()),
+                        signature,
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(parent_member_type) = parent_member_type {
+                parent_member_type
+            } else {
+                let member_id =
+                    LuaMemberId::new(table_field.get_syntax_id(), closure_params.file_id);
+                db.get_type_index()
+                    .get_type_cache(&member_id.into())
+                    .filter(|type_cache| type_cache.is_doc())
+                    .map(|type_cache| type_cache.as_type().clone())
+                    .ok_or(InferFailReason::None)?
+            }
         }
         UnResolveParentAst::LuaAssignStat(assign) => {
             let (vars, exprs) = assign.get_var_and_expr_list();
@@ -307,7 +324,8 @@ fn resolve_closure_member_type(
                 .get(&closure_params.signature_id)
                 .ok_or(InferFailReason::None)?;
             let mut final_params = signature.get_type_params().to_vec();
-            let mut final_ret = LuaType::Unknown;
+            let mut final_ret = LuaType::Never;
+            let mut has_final_ret = false;
 
             let mut multi_function_type = Vec::new();
             for typ in union_types.into_vec() {
@@ -369,17 +387,21 @@ fn resolve_closure_member_type(
 
                             break;
                         }
-                        let new_type = TypeOps::Union.apply(
-                            db,
-                            final_param.1.as_ref().unwrap_or(&LuaType::Unknown),
-                            param.1.as_ref().unwrap_or(&LuaType::Unknown),
-                        );
-                        final_params[idx] = (final_param.0.clone(), Some(new_type));
+                        let new_type = match (&final_param.1, &param.1) {
+                            (Some(final_type), Some(param_type)) => {
+                                Some(TypeOps::Union.apply(db, final_type, param_type))
+                            }
+                            (Some(final_type), None) => Some(final_type.clone()),
+                            (None, Some(param_type)) => Some(param_type.clone()),
+                            (None, None) => None,
+                        };
+                        final_params[idx] = (final_param.0.clone(), new_type);
                     } else {
                         final_params.push((param.0.clone(), param.1.clone()));
                     }
                 }
 
+                has_final_ret = true;
                 final_ret = TypeOps::Union.apply(db, &final_ret, doc_func.get_ret());
             }
 
@@ -388,6 +410,12 @@ fn resolve_closure_member_type(
             {
                 param.1 = Some(variadic_type);
             }
+
+            let final_ret = if !has_final_ret {
+                LuaType::Unknown
+            } else {
+                final_ret
+            };
 
             resolve_doc_function(
                 db,
@@ -398,6 +426,7 @@ fn resolve_closure_member_type(
                     signature.is_vararg,
                     final_params,
                     final_ret,
+                    Some(signature.get_function_generic_params()),
                 ),
                 self_type,
             )

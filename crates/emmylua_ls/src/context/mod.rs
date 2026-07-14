@@ -33,11 +33,12 @@ use crate::context::snapshot::ServerContextInner;
 // ## Global Lock Order (Low to High Priority):
 // 1. **diagnostic_tokens** (Mutex) - File diagnostic task tokens
 // 2. **workspace_diagnostic_token** (Mutex) - Workspace diagnostic task token
-// 3. **update_token** (Mutex) - Reindex/config update token
-// 4. **analysis** (RwLock - READ) - Read-only access to EmmyLuaAnalysis
-// 5. **workspace_manager** (RwLock - READ) - Read-only access to WorkspaceManager
-// 6. **workspace_manager** (RwLock - WRITE) - Exclusive access to WorkspaceManager
-// 7. **analysis** (RwLock - WRITE) - Exclusive access to EmmyLuaAnalysis
+// 3. **config_reload_token / reindex_token** (Mutex) - Debounced workspace tasks
+// 4. **reload_lock** (tokio::Mutex) - Serializes full workspace reloads
+// 5. **analysis** (RwLock - READ) - Read-only access to EmmyLuaAnalysis
+// 6. **workspace_manager** (RwLock - READ) - Read-only access to WorkspaceManager
+// 7. **workspace_manager** (RwLock - WRITE) - Exclusive access to WorkspaceManager
+// 8. **analysis** (RwLock - WRITE) - Exclusive access to EmmyLuaAnalysis
 //
 // ## Lock Ordering Rules:
 // - **NEVER acquire a lower-priority lock while holding a higher-priority lock**
@@ -113,17 +114,19 @@ impl ServerContext {
         }));
 
         let analysis = Arc::new(RwLock::new(EmmyLuaAnalysis::new()));
-        let status_bar = Arc::new(StatusBar::new(client.clone()));
+        let lsp_features = Arc::new(LspFeatures::new(client_capabilities));
+        let status_bar = Arc::new(StatusBar::new(
+            client.clone(),
+            lsp_features.supports_work_done_progress(),
+        ));
         let file_diagnostic = Arc::new(FileDiagnostic::new(
             analysis.clone(),
             status_bar.clone(),
             client.clone(),
         ));
-        let lsp_features = Arc::new(LspFeatures::new(client_capabilities));
         let workspace_manager = Arc::new(RwLock::new(WorkspaceManager::new(
             analysis.clone(),
             client.clone(),
-            status_bar.clone(),
             file_diagnostic.clone(),
             lsp_features.clone(),
         )));

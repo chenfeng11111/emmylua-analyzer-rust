@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use emmylua_parser::{LuaVersionCondition, VisibilityKind};
 
-use crate::{
-    LuaType, LuaTypeDeclId,
-    db_index::property::decl_feature::{DeclFeatureFlag, PropertyDeclFeature},
-};
+use crate::db_index::property::decl_feature::{DeclFeatureFlag, PropertyDeclFeature};
+
+use super::{LuaAttributeCollectionExt, LuaAttributeUse, LuaBuiltinAttributeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LuaCommonProperty {
@@ -15,7 +14,6 @@ pub struct LuaCommonProperty {
     pub deprecated: Option<Box<LuaDeprecated>>,
     pub version_conds: Option<Box<Vec<LuaVersionCondition>>>,
     pub tag_content: Option<Box<LuaTagContent>>,
-    pub export: Option<LuaExport>,
     pub decl_features: DeclFeatureFlag,
     pub attribute_uses: Option<Arc<Vec<LuaAttributeUse>>>,
 }
@@ -35,7 +33,6 @@ impl LuaCommonProperty {
             deprecated: None,
             version_conds: None,
             tag_content: None,
-            export: None,
             decl_features: DeclFeatureFlag::new(),
             attribute_uses: None,
         }
@@ -47,10 +44,6 @@ impl LuaCommonProperty {
 
     pub fn version_conds(&self) -> Option<&Vec<LuaVersionCondition>> {
         self.version_conds.as_deref()
-    }
-
-    pub fn export(&self) -> Option<&LuaExport> {
-        self.export.as_ref()
     }
 
     pub fn tag_content(&self) -> Option<&LuaTagContent> {
@@ -90,10 +83,6 @@ impl LuaCommonProperty {
             .add_tag(tag, content);
     }
 
-    pub fn add_extra_export(&mut self, export: LuaExport) {
-        self.export = Some(export);
-    }
-
     pub fn add_decl_feature(&mut self, feature: PropertyDeclFeature) {
         self.decl_features.add_feature(feature);
     }
@@ -111,11 +100,18 @@ impl LuaCommonProperty {
     }
 
     pub fn find_attribute_use(&self, id: &str) -> Option<&LuaAttributeUse> {
-        self.attribute_uses.as_ref().and_then(|attribute_uses| {
-            attribute_uses
-                .iter()
-                .find(|attribute_use| attribute_use.id.get_name() == id)
-        })
+        self.attribute_uses
+            .as_ref()
+            .and_then(|attribute_uses| attribute_uses.as_slice().find_attribute_use(id))
+    }
+
+    pub fn find_builtin_attribute(
+        &self,
+        kind: LuaBuiltinAttributeKind,
+    ) -> Option<&LuaAttributeUse> {
+        self.attribute_uses
+            .as_ref()
+            .and_then(|attribute_uses| attribute_uses.as_slice().find_builtin_attribute(kind))
     }
 }
 
@@ -123,13 +119,6 @@ impl LuaCommonProperty {
 pub enum LuaDeprecated {
     Deprecated,
     DeprecatedWithMessage(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LuaExportScope {
-    Default, // 默认声明, 会根据配置文件作不同的处理.
-    Global,
-    Namespace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,11 +146,6 @@ impl LuaTagContent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LuaExport {
-    pub scope: LuaExportScope,
-}
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Copy)]
 pub struct LuaPropertyId {
     id: u32,
@@ -170,24 +154,5 @@ pub struct LuaPropertyId {
 impl LuaPropertyId {
     pub fn new(id: u32) -> Self {
         Self { id }
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct LuaAttributeUse {
-    pub id: LuaTypeDeclId,
-    pub args: Vec<(String, Option<LuaType>)>,
-}
-
-impl LuaAttributeUse {
-    pub fn new(id: LuaTypeDeclId, args: Vec<(String, Option<LuaType>)>) -> Self {
-        Self { id, args }
-    }
-
-    pub fn get_param_by_name(&self, name: &str) -> Option<&LuaType> {
-        self.args
-            .iter()
-            .find(|(n, _)| n == name)
-            .and_then(|(_, typ)| typ.as_ref())
     }
 }

@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod test {
-    use crate::{LuaAstNode, LuaComment, LuaParser, ParserConfig};
+    use crate::{
+        LuaAstNode, LuaComment, LuaCommentFormatDirective, LuaDocTagClass, LuaKind, LuaParser,
+        LuaTokenKind, ParserConfig,
+    };
 
     #[allow(unused)]
     fn print_ast(lua_code: &str) {
@@ -81,5 +84,143 @@ mod test {
         "#;
 
         print_ast(code);
+    }
+
+    #[test]
+    fn test_doc_type_with_inline_comment_marker_has_second_prefix_on_same_line() {
+        let code = "---@type string --1\nlocal s\n";
+
+        let tree = LuaParser::parse(code, ParserConfig::default());
+        let root = tree.get_chunk_node();
+        let comment = root.descendants::<LuaComment>().next().unwrap();
+
+        let prefix_tokens: Vec<_> = comment
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| {
+                let token = element.into_token()?;
+                matches!(
+                    token.kind(),
+                    LuaKind::Token(
+                        LuaTokenKind::TkDocStart
+                            | LuaTokenKind::TkDocLongStart
+                            | LuaTokenKind::TkDocContinue
+                            | LuaTokenKind::TkDocContinueOr
+                            | LuaTokenKind::TkNormalStart
+                    )
+                )
+                .then_some((token.kind(), token.text().to_string()))
+            })
+            .collect();
+
+        assert_eq!(
+            prefix_tokens,
+            vec![
+                (LuaKind::Token(LuaTokenKind::TkDocStart), "---@".to_string()),
+                (
+                    LuaKind::Token(LuaTokenKind::TkNormalStart),
+                    "--".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_comment_format_directive_only_recognizes_fmt_on_off() {
+        let tree = LuaParser::parse(
+            "-- fmt: off\nlocal a = 1\n-- fmt: on\n",
+            ParserConfig::default(),
+        );
+        let root = tree.get_chunk_node();
+        let mut comments = root.descendants::<LuaComment>();
+
+        assert_eq!(
+            comments.next().unwrap().get_format_directive(),
+            Some(LuaCommentFormatDirective::FormatOff)
+        );
+        assert_eq!(
+            comments.next().unwrap().get_format_directive(),
+            Some(LuaCommentFormatDirective::FormatOn)
+        );
+    }
+
+    #[test]
+    fn test_doc_comment_is_not_treated_as_format_directive() {
+        let tree = LuaParser::parse("--- fmt: off\nlocal a = 1\n", ParserConfig::default());
+        let root = tree.get_chunk_node();
+        let comment = root.descendants::<LuaComment>().next().unwrap();
+
+        assert_eq!(comment.get_format_directive(), None);
+    }
+
+    #[test]
+    fn test_doc_generic_default_type_accessor() {
+        let tree = LuaParser::parse(
+            "---@class A<T = number>\n---@class B<T extends number = string>\n",
+            ParserConfig::default(),
+        );
+        let root = tree.get_chunk_node();
+        let mut classes = root.descendants::<LuaDocTagClass>();
+
+        let class_a = classes.next().unwrap();
+        let param_a = class_a
+            .get_generic_decl()
+            .unwrap()
+            .get_generic_decl()
+            .next()
+            .unwrap();
+        assert!(param_a.get_constraint_type().is_none());
+        assert_eq!(
+            param_a
+                .get_default_type()
+                .unwrap()
+                .syntax()
+                .text()
+                .to_string(),
+            "number"
+        );
+
+        let class_b = classes.next().unwrap();
+        let param_b = class_b
+            .get_generic_decl()
+            .unwrap()
+            .get_generic_decl()
+            .next()
+            .unwrap();
+        assert_eq!(
+            param_b
+                .get_constraint_type()
+                .unwrap()
+                .syntax()
+                .text()
+                .to_string(),
+            "number"
+        );
+        assert_eq!(
+            param_b
+                .get_default_type()
+                .unwrap()
+                .syntax()
+                .text()
+                .to_string(),
+            "string"
+        );
+    }
+
+    #[test]
+    fn test_doc_generic_const_modifier_accessor() {
+        let tree = LuaParser::parse("---@class A<const T, U>\n", ParserConfig::default());
+        let root = tree.get_chunk_node();
+        let class = root.descendants::<LuaDocTagClass>().next().unwrap();
+        let generic_decl = class.get_generic_decl().unwrap();
+        let mut params = generic_decl.get_generic_decl();
+
+        let const_param = params.next().unwrap();
+        assert!(const_param.has_const_modifier());
+        assert_eq!(const_param.get_name_token().unwrap().get_name_text(), "T");
+
+        let regular_param = params.next().unwrap();
+        assert!(!regular_param.has_const_modifier());
+        assert_eq!(regular_param.get_name_token().unwrap().get_name_text(), "U");
     }
 }

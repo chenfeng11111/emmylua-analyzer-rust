@@ -2,10 +2,11 @@
 mod tests {
     use crate::text::Reader;
     use crate::{
-        LuaNonStdSymbol,
+        LuaFeatures,
         lexer::{LexerConfig, LuaLexer},
         parser_error::LuaParseError,
     };
+    use crate::{LuaFeaturesSet, LuaLanguageLevel};
 
     #[test]
     fn test_all_lua_token() {
@@ -1118,28 +1119,28 @@ LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 2036, leng
         continue
         "#;
 
-        let mut config = LexerConfig::default();
-        config.non_std_symbols.extends(vec![
-            LuaNonStdSymbol::DoubleSlash,
-            LuaNonStdSymbol::SlashStar,
-            LuaNonStdSymbol::Backtick,
-            LuaNonStdSymbol::PlusAssign,
-            LuaNonStdSymbol::MinusAssign,
-            LuaNonStdSymbol::StarAssign,
-            LuaNonStdSymbol::SlashAssign,
-            LuaNonStdSymbol::PercentAssign,
-            LuaNonStdSymbol::CaretAssign,
-            LuaNonStdSymbol::DoubleSlashAssign,
-            LuaNonStdSymbol::PipeAssign,
-            LuaNonStdSymbol::AmpAssign,
-            LuaNonStdSymbol::ShiftLeftAssign,
-            LuaNonStdSymbol::ShiftRightAssign,
-            LuaNonStdSymbol::DoublePipe,
-            LuaNonStdSymbol::DoubleAmp,
-            LuaNonStdSymbol::Exclamation,
-            LuaNonStdSymbol::NotEqual,
-            LuaNonStdSymbol::Continue,
+        let set: LuaFeaturesSet = LuaFeaturesSet::new(vec![
+            LuaFeatures::DoubleSlash,
+            LuaFeatures::SlashStar,
+            LuaFeatures::StringInterpolation,
+            LuaFeatures::PlusAssign,
+            LuaFeatures::MinusAssign,
+            LuaFeatures::StarAssign,
+            LuaFeatures::SlashAssign,
+            LuaFeatures::PercentAssign,
+            LuaFeatures::CaretAssign,
+            LuaFeatures::DoubleSlashAssign,
+            LuaFeatures::PipeAssign,
+            LuaFeatures::AmpAssign,
+            LuaFeatures::ShiftLeftAssign,
+            LuaFeatures::ShiftRightAssign,
+            LuaFeatures::DoublePipeOr,
+            LuaFeatures::DoubleAmpAnd,
+            LuaFeatures::Exclamation,
+            LuaFeatures::NotEqual,
+            LuaFeatures::Continue,
         ]);
+        let config = LexerConfig::new_with_extended_features(LuaLanguageLevel::Lua55, set);
 
         let mut errors: Vec<LuaParseError> = Vec::new();
         let mut lexer = LuaLexer::new(Reader::new(text), config, Some(&mut errors));
@@ -1243,19 +1244,19 @@ LuaTokenData { kind: TkEndOfLine, range: SourceRange { start_offset: 257, length
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 258, length: 8 } }
 LuaTokenData { kind: TkName, range: SourceRange { start_offset: 266, length: 1 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 267, length: 1 } }
-LuaTokenData { kind: TkOr, range: SourceRange { start_offset: 268, length: 2 } }
+LuaTokenData { kind: TkLogicalOr, range: SourceRange { start_offset: 268, length: 2 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 270, length: 1 } }
 LuaTokenData { kind: TkName, range: SourceRange { start_offset: 271, length: 1 } }
 LuaTokenData { kind: TkEndOfLine, range: SourceRange { start_offset: 272, length: 1 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 273, length: 8 } }
 LuaTokenData { kind: TkName, range: SourceRange { start_offset: 281, length: 1 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 282, length: 1 } }
-LuaTokenData { kind: TkAnd, range: SourceRange { start_offset: 283, length: 2 } }
+LuaTokenData { kind: TkLogicalAnd, range: SourceRange { start_offset: 283, length: 2 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 285, length: 1 } }
 LuaTokenData { kind: TkName, range: SourceRange { start_offset: 286, length: 1 } }
 LuaTokenData { kind: TkEndOfLine, range: SourceRange { start_offset: 287, length: 1 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 288, length: 8 } }
-LuaTokenData { kind: TkNot, range: SourceRange { start_offset: 296, length: 1 } }
+LuaTokenData { kind: TkToggle, range: SourceRange { start_offset: 296, length: 1 } }
 LuaTokenData { kind: TkName, range: SourceRange { start_offset: 297, length: 1 } }
 LuaTokenData { kind: TkEndOfLine, range: SourceRange { start_offset: 298, length: 1 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 299, length: 8 } }
@@ -1266,7 +1267,7 @@ LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 311, lengt
 LuaTokenData { kind: TkName, range: SourceRange { start_offset: 312, length: 1 } }
 LuaTokenData { kind: TkEndOfLine, range: SourceRange { start_offset: 313, length: 1 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 314, length: 8 } }
-LuaTokenData { kind: TkBreak, range: SourceRange { start_offset: 322, length: 8 } }
+LuaTokenData { kind: TkName, range: SourceRange { start_offset: 322, length: 8 } }
 LuaTokenData { kind: TkEndOfLine, range: SourceRange { start_offset: 330, length: 1 } }
 LuaTokenData { kind: TkWhitespace, range: SourceRange { start_offset: 331, length: 8 } }
         "#;

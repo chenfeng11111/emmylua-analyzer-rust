@@ -6,7 +6,7 @@ use crate::{
     AnalyzeError, DiagnosticCode, LuaDeclId,
     compilation::analyzer::doc::{
         attribute_tags::analyze_tag_attribute_use, property_tags::analyze_readonly,
-        type_def_tags::analyze_attribute, type_ref_tags::analyze_doc_tag_schema,
+        type_ref_tags::analyze_doc_tag_schema,
     },
     db_index::{LuaMemberId, LuaSemanticDeclId, LuaSignatureId},
 };
@@ -16,13 +16,13 @@ use super::{
     diagnostic_tags::analyze_diagnostic,
     field_or_operator_def_tags::{analyze_field, analyze_operator},
     property_tags::{
-        analyze_async, analyze_deprecated, analyze_export, analyze_nodiscard, analyze_source,
-        analyze_version, analyze_visibility,
+        analyze_async, analyze_deprecated, analyze_nodiscard, analyze_source, analyze_version,
+        analyze_visibility,
     },
     type_def_tags::{analyze_alias, analyze_class, analyze_enum, analyze_func_generic},
     type_ref_tags::{
         analyze_as, analyze_cast, analyze_module, analyze_other, analyze_overload, analyze_param,
-        analyze_return, analyze_return_cast, analyze_see, analyze_type,
+        analyze_return, analyze_return_cast, analyze_return_overload, analyze_see, analyze_type,
     },
 };
 
@@ -41,9 +41,6 @@ pub fn analyze_tag(analyzer: &mut DocAnalyzer, tag: LuaDocTag) -> Option<()> {
         LuaDocTag::Alias(alias) => {
             analyze_alias(analyzer, alias)?;
         }
-        LuaDocTag::Attribute(attribute) => {
-            analyze_attribute(analyzer, attribute)?;
-        }
 
         // ref
         LuaDocTag::Type(type_tag) => {
@@ -54,6 +51,9 @@ pub fn analyze_tag(analyzer: &mut DocAnalyzer, tag: LuaDocTag) -> Option<()> {
         }
         LuaDocTag::Return(return_tag) => {
             analyze_return(analyzer, return_tag)?;
+        }
+        LuaDocTag::ReturnOverload(return_overload_tag) => {
+            analyze_return_overload(analyzer, return_overload_tag)?;
         }
         LuaDocTag::ReturnCast(return_cast) => {
             analyze_return_cast(analyzer, return_cast)?;
@@ -110,9 +110,6 @@ pub fn analyze_tag(analyzer: &mut DocAnalyzer, tag: LuaDocTag) -> Option<()> {
         }
         LuaDocTag::Other(other) => {
             analyze_other(analyzer, other)?;
-        }
-        LuaDocTag::Export(export) => {
-            analyze_export(analyzer, export)?;
         }
         LuaDocTag::Readonly(readonly) => {
             analyze_readonly(analyzer, readonly)?;
@@ -182,7 +179,11 @@ pub fn get_owner_id(
             match first_var {
                 LuaVarExpr::NameExpr(name_expr) => {
                     let decl_id = LuaDeclId::new(analyzer.file_id, name_expr.get_position());
-                    let _ = analyzer.db.get_decl_index_mut().get_decl_mut(&decl_id)?;
+                    let _ = analyzer
+                        .type_context
+                        .db
+                        .get_decl_index_mut()
+                        .get_decl_mut(&decl_id)?;
                     Some(LuaSemanticDeclId::LuaDecl(decl_id))
                 }
                 LuaVarExpr::IndexExpr(index_expr) => {
@@ -244,12 +245,16 @@ pub fn get_owner_id_or_report(
 }
 
 pub fn report_orphan_tag(analyzer: &mut DocAnalyzer, tag: &impl LuaAstNode) {
-    analyzer.db.get_diagnostic_index_mut().add_diagnostic(
-        analyzer.file_id,
-        AnalyzeError {
-            kind: DiagnosticCode::AnnotationUsageError,
-            message: t!("`@%{name}` can't be used here", name = tag.get_text()).to_string(),
-            range: tag.get_range(),
-        },
-    );
+    analyzer
+        .type_context
+        .db
+        .get_diagnostic_index_mut()
+        .add_diagnostic(
+            analyzer.file_id,
+            AnalyzeError {
+                kind: DiagnosticCode::AnnotationUsageError,
+                message: t!("`@%{name}` can't be used here", name = tag.get_text()).to_string(),
+                range: tag.get_range(),
+            },
+        );
 }

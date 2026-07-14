@@ -11,6 +11,7 @@ use crate::{
         infer_type::infer_type,
         tags::{get_owner_id, report_orphan_tag},
     },
+    get_attribute_constructor_params, is_attribute_class,
 };
 
 pub fn analyze_tag_attribute_use(
@@ -34,17 +35,20 @@ pub fn analyze_tag_attribute_use(
             (LuaAst::LuaDocTagReturn(_), LuaSemanticDeclId::Signature(_)) => {
                 return Some(());
             }
+            (LuaAst::LuaDocTagReturnOverload(_), LuaSemanticDeclId::Signature(_)) => {
+                return Some(());
+            }
             _ => {}
         }
     }
 
     let attribute_uses = infer_attribute_uses(analyzer, tag_use)?;
     for attribute_use in attribute_uses {
-        analyzer.db.get_property_index_mut().add_attribute_use(
-            analyzer.file_id,
-            owner_id.clone(),
-            attribute_use,
-        );
+        analyzer
+            .type_context
+            .db
+            .get_property_index_mut()
+            .add_attribute_use(analyzer.file_id, owner_id.clone(), attribute_use);
     }
     Some(())
 }
@@ -56,28 +60,24 @@ pub fn infer_attribute_uses(
     let attribute_uses = tag_use.get_attribute_uses();
     let mut result = Vec::new();
     for attribute_use in attribute_uses {
-        let attribute_type = infer_type(analyzer, LuaDocType::Name(attribute_use.get_type()?));
+        let attribute_type = infer_type(
+            &mut analyzer.type_context,
+            LuaDocType::Name(attribute_use.get_type()?),
+        );
         if let LuaType::Ref(type_id) = attribute_type {
+            if !is_attribute_class(analyzer.type_context.db, &type_id) {
+                continue;
+            }
+
             let arg_types: Vec<LuaType> = attribute_use
                 .get_arg_list()
                 .map(|arg_list| arg_list.get_args().map(infer_attribute_arg_type).collect())
                 .unwrap_or_default();
-            let param_names = analyzer
-                .db
-                .get_type_index()
-                .get_type_decl(&type_id)
-                .and_then(|decl| decl.get_attribute_type())
-                .and_then(|typ| match typ {
-                    LuaType::DocAttribute(attr_type) => Some(
-                        attr_type
-                            .get_params()
-                            .iter()
-                            .map(|(name, _)| name.clone())
-                            .collect::<Vec<_>>(),
-                    ),
-                    _ => None,
-                })
-                .unwrap_or_default();
+            let param_names: Vec<String> =
+                get_attribute_constructor_params(analyzer.type_context.db, &type_id, &arg_types)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
 
             let mut params = Vec::new();
             for (idx, arg_type) in arg_types.into_iter().enumerate() {
@@ -147,7 +147,8 @@ fn attribute_find_doc(comment: &LuaSyntaxNode) -> Option<LuaSyntaxNode> {
                 LuaKind::Syntax(
                     LuaSyntaxKind::DocTagField
                     | LuaSyntaxKind::DocTagParam
-                    | LuaSyntaxKind::DocTagReturn,
+                    | LuaSyntaxKind::DocTagReturn
+                    | LuaSyntaxKind::DocTagReturnOverload,
                 ) => {
                     if let Some(node) = sibling.as_node() {
                         return Some(node.clone());

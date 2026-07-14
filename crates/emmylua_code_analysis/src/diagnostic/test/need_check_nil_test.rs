@@ -6,7 +6,7 @@ mod test {
     fn test_issue_245() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::NeedCheckNil,
             r#"
         local a --- @type table?
@@ -17,7 +17,7 @@ mod test {
     #[test]
     fn test_issue_402() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::NeedCheckNil,
             r#"
             ---@class A
@@ -36,7 +36,7 @@ mod test {
     #[test]
     fn test_issue_474() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::NeedCheckNil,
             r#"
             ---@class Range4
@@ -66,7 +66,7 @@ mod test {
             ---@field get2 fun(self: self, a: number): Cast1?
         "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::NeedCheckNil,
             r#"
                 ---@type Cast1
@@ -81,7 +81,7 @@ mod test {
     #[test]
     fn test_issue_895_891() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::NeedCheckNil,
             r#"
         local t = {
@@ -103,7 +103,7 @@ mod test {
     #[test]
     fn test_issue_886() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::AssignTypeMismatch,
             r#"
         ---@type string[]
@@ -117,6 +117,32 @@ mod test {
 
         ---@type string
         local s = a[#a]
+        "#,
+        ));
+    }
+
+    #[test]
+    fn test_asserted_index_assignment_prefix_is_not_nil() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::NeedCheckNil,
+            r#"
+        ---@type integer[][]
+        local res
+        res[1][1] = assert(res[1])[2]
+        "#,
+        ));
+    }
+
+    #[test]
+    fn test_different_asserted_index_assignment_prefix_still_needs_nil_check() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::NeedCheckNil,
+            r#"
+        ---@type integer[][]
+        local res
+        res[1][1] = assert(res[2])[2]
         "#,
         ));
     }

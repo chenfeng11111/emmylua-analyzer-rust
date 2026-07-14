@@ -23,6 +23,8 @@ pub enum LuaSyntaxKind {
     FuncStat,
     LabelStat,
     BreakStat,
+    ContinueStat,
+    ConstStat,
     ReturnStat,
     GotoStat,
     CallExprStat,
@@ -47,6 +49,8 @@ pub enum LuaSyntaxKind {
     SetmetatableCallExpr, // setmetatable(a, b)
     IndexExpr,
     NameExpr,
+    TernaryExpr,   // a ? b : c
+    SafeIndexExpr, // a?.b
 
     // other
     LocalName,
@@ -69,6 +73,7 @@ pub enum LuaSyntaxKind {
     DocTagType,
     DocTagParam,
     DocTagReturn,
+    DocTagReturnOverload,
     DocTagGeneric,
     DocTagSee,
     DocTagDeprecated,
@@ -90,9 +95,7 @@ pub enum LuaSyntaxKind {
     DocTagSource,
     DocTagReadonly,
     DocTagReturnCast,
-    DocTagExport,
     DocTagLanguage,
-    DocTagAttribute,
     DocTagAttributeUse, // '@['
     DocTagCallGeneric,
     DocTagSchema,
@@ -113,7 +116,6 @@ pub enum LuaSyntaxKind {
     TypeNullable, // <Type>?
     TypeStringTemplate, // prefixName.`T`
     TypeMultiLineUnion, // | simple type # description
-    TypeAttribute, // declare. attribute<(paramList)>
 
     // follow donot support now
     TypeMatch,

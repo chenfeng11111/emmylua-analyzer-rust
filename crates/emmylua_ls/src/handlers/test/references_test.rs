@@ -184,6 +184,92 @@ mod tests {
     }
 
     #[gtest]
+    fn test_constructor_attribute_references_class_call() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new_with_init_std_lib();
+        check!(ws.check_references(
+            r#"
+                ---@generic T
+                ---@[constructor("init")]
+                ---@param class `T`
+                ---@return T
+                function meta(class)
+                    return {}
+                end
+
+                ---@class AAAA
+                local AAAA = meta("AAAA")
+
+                function AAAA:in<??>it()
+                end
+
+                local c = AAAA()
+            "#,
+            vec![],
+            vec![
+                VirtualLocation {
+                    file: "".to_string(),
+                    line: 12,
+                },
+                VirtualLocation {
+                    file: "".to_string(),
+                    line: 15,
+                },
+            ],
+        ));
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_goto_label_references() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+        check!(ws.check_references(
+            r#"
+                while true do
+                    goto cont
+                    ::co<??>nt::
+                end
+            "#,
+            vec![],
+            vec![
+                VirtualLocation {
+                    file: "".to_string(),
+                    line: 2,
+                },
+                VirtualLocation {
+                    file: "".to_string(),
+                    line: 3,
+                },
+            ],
+        ));
+        Ok(())
+    }
+
+    #[gtest]
+    fn test_references_excludes_declaration_when_requested() -> Result<()> {
+        let mut ws = ProviderVirtualWorkspace::new();
+
+        let (main_content, position) = check!(ProviderVirtualWorkspace::handle_file_content(
+            r#"
+                local tar<??>get = 1
+                print(target)
+                target = 2
+            "#,
+        ));
+        let file_id = ws.def(&main_content);
+
+        let result = references(&ws.analysis, file_id, position, false)
+            .ok_or("failed to get references")
+            .or_fail()?;
+
+        let mut lines = result
+            .iter()
+            .map(|location| location.range.start.line)
+            .collect::<Vec<_>>();
+        lines.sort();
+        verify_eq!(lines, vec![2, 3])
+    }
+
+    #[gtest]
     fn test_member_references_alias_cycle_does_not_stack_overflow() -> Result<()> {
         let mut ws = ProviderVirtualWorkspace::new();
 
@@ -197,7 +283,7 @@ mod tests {
         ));
         let file_id = ws.def(&main_content);
 
-        let result = references(&ws.analysis, file_id, position)
+        let result = references(&ws.analysis, file_id, position, true)
             .ok_or("failed to get references")
             .or_fail()?;
 

@@ -2,16 +2,23 @@ use emmylua_parser::{LuaAstNode, LuaChunk, LuaExpr};
 
 use crate::{
     InferFailReason, LuaDeclId, LuaSemanticDeclId, LuaSignatureId,
-    compilation::analyzer::unresolve::UnResolveModule, db_index::LuaType,
+    compilation::analyzer::unresolve::UnResolveModule, db_index::LuaType, infer_expr,
 };
 
-use super::{LuaAnalyzer, LuaReturnPoint, func_body::analyze_func_body_returns};
+use super::{LuaAnalyzer, LuaReturnPoint, analyze_func_body_returns_with};
 
 pub fn analyze_chunk_return(analyzer: &mut LuaAnalyzer, chunk: LuaChunk) -> Option<()> {
     let block = chunk.get_block()?;
-    let return_exprs = analyze_func_body_returns(block);
+    let file_id = analyzer.file_id;
+    let cache = analyzer.context.infer_manager.get_infer_cache(file_id);
+    let return_exprs = analyze_func_body_returns_with(block, &mut |expr| {
+        Ok(infer_expr(analyzer.db, cache, expr.clone()).unwrap_or(LuaType::Unknown))
+    })
+    .unwrap_or_default();
     for point in return_exprs {
         if let LuaReturnPoint::Expr(expr) = point {
+            // Module export selection follows the first return candidate.
+            // It does not refine `pred()`-style call conditions.
             let expr_type = match analyzer.infer_expr(&expr) {
                 Ok(expr_type) => expr_type,
                 Err(InferFailReason::None) => LuaType::Unknown,
@@ -27,20 +34,23 @@ pub fn analyze_chunk_return(analyzer: &mut LuaAnalyzer, chunk: LuaChunk) -> Opti
 
             let semantic_id = get_semantic_id(analyzer, expr.clone());
 
+            let visibility = semantic_id.as_ref().and_then(|id| {
+                analyzer
+                    .db
+                    .get_property_index()
+                    .get_property(id)
+                    .map(|p| p.visibility.clone())
+            });
+
             let module_info = analyzer
                 .db
                 .get_module_index_mut()
                 .get_module_mut(analyzer.file_id)?;
-            match expr_type {
-                LuaType::Variadic(multi) => {
-                    let ty = multi.get_type(0)?;
-                    module_info.export_type = Some(ty.clone());
-                }
-                _ => {
-                    module_info.export_type = Some(expr_type);
-                }
-            }
+            module_info.export_type = Some(expr_type.get_result_slot_type(0).unwrap_or(expr_type));
             module_info.semantic_id = semantic_id;
+            if let Some(visibility) = visibility {
+                module_info.merge_visibility(visibility);
+            }
             break;
         }
     }

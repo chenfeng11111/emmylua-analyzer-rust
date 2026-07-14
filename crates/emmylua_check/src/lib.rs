@@ -18,11 +18,14 @@ pub async fn run_check(cmd_args: CmdArgs) -> Result<(), Box<dyn Error + Sync + S
         .workspace
         .into_iter()
         .map(|workspace| {
-            if workspace.is_absolute() {
+            let path = if workspace.is_absolute() {
                 workspace
             } else {
                 cwd.join(workspace)
-            }
+            };
+            // Canonicalize to resolve ".." components so the path matches
+            // the workspace root registered via add_main_workspace.
+            path.canonicalize().unwrap_or(path)
         })
         .collect();
     let main_path = workspaces
@@ -35,7 +38,9 @@ pub async fn run_check(cmd_args: CmdArgs) -> Result<(), Box<dyn Error + Sync + S
         workspaces.clone(),
         cmd_args.config,
         cmd_args.ignore,
-    ) {
+    )
+    .await
+    {
         Some(analysis) => analysis,
         None => {
             return Err("Failed to load workspace".into());
@@ -57,6 +62,9 @@ pub async fn run_check(cmd_args: CmdArgs) -> Result<(), Box<dyn Error + Sync + S
             sender.send((file_id, diagnostics)).await.unwrap();
         });
     }
+    // Drop the original sender so the receiver can detect when all spawned
+    // tasks have finished and their cloned senders are dropped.
+    drop(sender);
 
     let exit_code = output_result(
         need_check_files.len(),
@@ -66,6 +74,7 @@ pub async fn run_check(cmd_args: CmdArgs) -> Result<(), Box<dyn Error + Sync + S
         cmd_args.output_format,
         cmd_args.output,
         cmd_args.warnings_as_errors,
+        cmd_args.severity,
     )
     .await;
 

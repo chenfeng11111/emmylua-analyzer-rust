@@ -150,10 +150,20 @@ fn has_non_callable_member(db: &DbIndex, typ: &LuaType) -> bool {
         LuaType::Any | LuaType::Unknown | LuaType::SelfInfer | LuaType::Global | LuaType::Nil => {
             false
         }
+        LuaType::TplRef(tpl) => tpl
+            .get_constraint()
+            .is_some_and(|constraint| has_non_callable_member(db, constraint)),
+        LuaType::StrTplRef(str_tpl) => str_tpl
+            .get_constraint()
+            .is_some_and(|constraint| has_non_callable_member(db, constraint)),
         LuaType::Union(union) => union
             .into_vec()
             .iter()
             .any(|t| has_non_callable_member(db, t)),
+        LuaType::Intersection(intersection) => intersection
+            .get_types()
+            .iter()
+            .all(|t| has_non_callable_member(db, t)),
         LuaType::MultiLineUnion(union) => union
             .get_unions()
             .iter()
@@ -174,7 +184,7 @@ fn collect_non_callable_union_types(
         if *real_type == LuaType::Nil {
             return;
         }
-        if real_type.is_function() || real_type.is_call() {
+        if !has_non_callable_member(db, real_type) {
             return;
         }
         if infer_call_expr_func(

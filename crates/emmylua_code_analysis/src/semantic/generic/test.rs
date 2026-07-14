@@ -1,10 +1,12 @@
 #[cfg(test)]
 mod test {
-    use crate::{DiagnosticCode, LuaType, VirtualWorkspace};
+    use crate::{
+        DiagnosticCode, LuaType, RenderLevel, TypeSubstitutor, VirtualWorkspace, humanize_type,
+    };
 
     #[test]
     fn test_variadic_func() {
-        let mut ws = crate::VirtualWorkspace::new();
+        let mut ws = VirtualWorkspace::new();
         ws.def(
             r#"
         ---@generic T, R
@@ -32,7 +34,7 @@ mod test {
 
     #[test]
     fn test_select_type() {
-        let mut ws = crate::VirtualWorkspace::new_with_init_std_lib();
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
         ws.def(
             r#"
         ---@param ... string
@@ -72,11 +74,24 @@ mod test {
         let h = ws.expr_ty("h");
         let expected = LuaType::IntegerConst(2);
         assert_eq!(h, expected);
+
+        // select(n, func()) where func() returns multiple values
+        ws.def(
+            r#"
+        ---@return integer, string
+        function multi_ret() end
+        g = select(2, multi_ret())
+        "#,
+        );
+
+        let g = ws.expr_ty("g");
+        let expected_g = ws.ty("string");
+        assert_eq!(g, expected_g);
     }
 
     #[test]
     fn test_unpack() {
-        let mut ws = crate::VirtualWorkspace::new_with_init_std_lib();
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
 
         ws.def(
             r#"
@@ -98,7 +113,7 @@ mod test {
 
     #[test]
     fn test_return() {
-        let mut ws = crate::VirtualWorkspace::new();
+        let mut ws = VirtualWorkspace::new();
         ws.def(
             r#"
                 ---@class ab
@@ -197,7 +212,7 @@ result = {
 
     #[test]
     fn test_call_generic() {
-        let mut ws = crate::VirtualWorkspace::new();
+        let mut ws = VirtualWorkspace::new();
         ws.def(
             r#"
             ---@alias Warp<T> T
@@ -209,7 +224,7 @@ result = {
         "#,
         );
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type Warp<number>, Warp<string>
@@ -218,7 +233,7 @@ result = {
         "#,
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
             ---@type Warp<number>, Warp<string>
@@ -230,7 +245,7 @@ result = {
 
     #[test]
     fn test_generic_alias_instantiation() {
-        let mut ws = crate::VirtualWorkspace::new();
+        let mut ws = VirtualWorkspace::new();
         ws.def(
             r#"
             ---@alias Arrayable<T> T | T[]
@@ -260,8 +275,55 @@ result = {
     }
 
     #[test]
+    fn test_keyof_generic_instantiates_to_union() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class A
+            ---@field one 1
+            ---@field two 2
+            ---@field three 3
+
+            ---@alias B<T> T extends any and keyof T or never
+            "#,
+        );
+
+        let ty = ws.ty("B<A>");
+        let db = ws.analysis.compilation.get_db();
+        let origin = match ty {
+            LuaType::Generic(generic) => {
+                let type_decl = db
+                    .get_type_index()
+                    .get_type_decl(&generic.get_base_type_id())
+                    .expect("B must resolve to an alias declaration");
+                let substitutor = TypeSubstitutor::from_type_array(generic.get_params().clone());
+                type_decl
+                    .get_alias_origin(&db, Some(&substitutor))
+                    .expect("B<A> must expand to its instantiated alias origin")
+            }
+            ty => ty,
+        };
+
+        let LuaType::Union(union) = &origin else {
+            panic!(
+                "keyof generic should instantiate to union, got {}",
+                humanize_type(&db, &origin, RenderLevel::Detailed)
+            );
+        };
+
+        let mut keys = union
+            .into_vec()
+            .iter()
+            .map(|ty| humanize_type(&db, ty, RenderLevel::Brief))
+            .collect::<Vec<_>>();
+        keys.sort();
+
+        assert_eq!(keys, vec!["\"one\"", "\"three\"", "\"two\""]);
+    }
+
+    #[test]
     fn test_generic_alias_instantiation2() {
-        let mut ws = crate::VirtualWorkspace::new();
+        let mut ws = VirtualWorkspace::new();
         ws.def(
             r#"
             ---@alias Arrayable<T> T | T[]
@@ -272,9 +334,9 @@ result = {
             function toArray(value)
 
             end
-        "#,
+            "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ParamTypeMismatch,
             r#"
 
@@ -284,5 +346,173 @@ result = {
             local arraySuites = toArray(suite)
             "#
         ));
+    }
+
+    #[test]
+    fn test_dot_defined_generic_constructor_called_with_colon() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class a
+            local a = {}
+
+            ---@generic T
+            ---@param cls T
+            ---@return T
+            function a.create(cls)
+                local instance = setmetatable({}, cls)
+                return instance
+            end
+
+            b = a:create()
+            "#,
+        );
+
+        let ty = ws.expr_ty("b");
+        assert_eq!(ws.humanize_type(ty), "a");
+    }
+
+    #[test]
+    fn test_generic_map_lambda_return() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic T, U
+            ---@param list T[]
+            ---@param fn fun(item: T): U
+            ---@return U[]
+            local function map(list, fn)
+            end
+
+            local list_1 = {} ---@type string[]
+
+            _mapped_2 = map(list_1, function (item)
+                return item
+            end)
+        "#,
+        );
+
+        let ty = ws.expr_ty("_mapped_2");
+        let expected = ws.ty("string[]");
+        assert_eq!(ty, expected);
+    }
+
+    #[test]
+    fn test_colon_call_infers_generic_self_and_callback_return() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Promise<T>
+            local M = {}
+
+            ---@alias Unwrap<T> T extends Promise<infer U> and U or T
+
+            ---@generic T
+            ---@return Promise<T>
+            function M.new() return M end
+
+            ---@generic U
+            ---@param on_resolved fun(value: T): U
+            ---@return Promise<Unwrap<U>>
+            function M:then1(on_resolved) return self end
+
+            p1 = M.new():then1(function()
+                return {} ---@as Promise<integer>
+            end)
+
+        "#,
+        );
+
+        let expected = ws.ty("Promise<integer>");
+        assert_eq!(ws.expr_ty("p1"), expected);
+        // assert_eq!(ws.expr_ty("p2"), expected);
+    }
+
+    #[test]
+    fn test_simple_alias_param_still_infers_function_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias Id<T> T
+
+            ---@generic T
+            ---@param value Id<T>
+            ---@return T
+            function id(value)
+            end
+
+            result = id("value")
+        "#,
+        );
+
+        assert_eq!(ws.expr_ty("result"), ws.ty("string"));
+    }
+
+    #[test]
+    fn test_function_and_alias_generic_same_name_do_not_collide() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@alias Id<U> U
+
+            ---@generic U
+            ---@param value Id<U>
+            ---@return U
+            function id(value)
+            end
+
+            result = id("value")
+        "#,
+        );
+
+        assert_eq!(ws.expr_ty("result"), ws.ty("string"));
+    }
+
+    #[test]
+    fn test_nested_callback_return_alias_waits_for_function_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@class Promise<T>
+            local M = {}
+
+            ---@alias Unwrap<T> T extends Promise<infer U> and U or T
+            ---@alias Awaited<T> Unwrap<T>
+
+            ---@generic T
+            ---@return Promise<T>
+            function M.new() return M end
+
+            ---@generic U
+            ---@param on_resolved fun(value: T): U
+            ---@return Promise<Awaited<U>>
+            function M:then_nested(on_resolved) return self end
+
+            result = M.new():then_nested(function()
+                return {} ---@as Promise<integer>
+            end)
+        "#,
+        );
+
+        assert_eq!(ws.expr_ty("result"), ws.ty("Promise<integer>"));
+    }
+
+    #[test]
+    fn test_nested_function_generic_shadows_outer_function_generic() {
+        let mut ws = VirtualWorkspace::new();
+        ws.def(
+            r#"
+            ---@generic T
+            ---@param value T
+            ---@return fun<T>(value: T): T
+            function make(value)
+            end
+
+            local fn = make("outer")
+            result = fn(1)
+        "#,
+        );
+
+        assert_eq!(ws.expr_ty("result"), ws.ty("integer"));
     }
 }

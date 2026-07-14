@@ -1,13 +1,16 @@
 use emmylua_parser::{LuaAstNode, LuaCallExpr};
 
-use crate::{DiagnosticCode, LuaType, SemanticModel, check_export_visibility};
+use crate::{DiagnosticCode, LuaType, SemanticModel, check_module_visibility};
 
 use super::{Checker, DiagnosticContext};
 
 pub struct RequireModuleVisibilityChecker;
 
 impl Checker for RequireModuleVisibilityChecker {
-    const CODES: &[DiagnosticCode] = &[DiagnosticCode::RequireModuleNotVisible];
+    const CODES: &[DiagnosticCode] = &[
+        DiagnosticCode::RequireModuleNotVisible,
+        DiagnosticCode::UnresolvedRequire,
+    ];
 
     fn check(context: &mut DiagnosticContext, semantic_model: &SemanticModel) {
         let root = semantic_model.get_root().clone();
@@ -37,18 +40,27 @@ fn check_require_call_expr(
     };
 
     // 查找模块信息
-    let module_info = semantic_model
+    let Some(module_info) = semantic_model
         .get_db()
         .get_module_index()
-        .find_module(&module_path)?;
+        .find_module(&module_path)
+    else {
+        context.add_diagnostic(
+            DiagnosticCode::UnresolvedRequire,
+            arg_expr.get_range(),
+            t!("Cannot resolve module `%{module}`.", module = module_path).to_string(),
+            None,
+        );
+        return Some(());
+    };
 
     // 检查可见性
-    if !check_export_visibility(semantic_model, module_info).unwrap_or(false) {
+    if !check_module_visibility(semantic_model, module_info).unwrap_or(false) {
         context.add_diagnostic(
             DiagnosticCode::RequireModuleNotVisible,
             arg_expr.get_range(),
             t!(
-                "Module '%{module}' is not visible. It has @export restrictions.",
+                "module '%{module}' visibility is not `public`",
                 module = module_info.full_module_name
             )
             .to_string(),

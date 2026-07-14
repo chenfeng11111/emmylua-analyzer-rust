@@ -5,6 +5,7 @@ mod union_type;
 
 use super::LuaType;
 use crate::DbIndex;
+pub(crate) use union_type::union_type_shallow;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum TypeOps {
@@ -35,5 +36,12 @@ impl TypeOps {
                 }
             }
         }
+    }
+
+    pub fn union_all<I>(db: &DbIndex, types: I) -> LuaType
+    where
+        I: IntoIterator<Item = LuaType>,
+    {
+        union_type::union_type_all(db, types)
     }
 }

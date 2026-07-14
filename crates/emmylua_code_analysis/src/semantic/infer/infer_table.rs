@@ -12,10 +12,7 @@ use crate::{
     infer_call_expr_func, infer_expr,
 };
 
-use super::{
-    InferFailReason, InferResult,
-    infer_index::{infer_member_by_member_key, infer_member_by_operator},
-};
+use super::{InferFailReason, InferResult, infer_index::infer_member};
 
 pub fn infer_table_expr(
     db: &DbIndex,
@@ -26,7 +23,7 @@ pub fn infer_table_expr(
         return infer_table_tuple_or_array(db, cache, table);
     }
 
-    Ok(LuaType::TableConst(crate::InFiled {
+    Ok(LuaType::TableConst(InFiled {
         file_id: cache.get_file_id(),
         value: table.get_range(),
     }))
@@ -185,21 +182,8 @@ pub fn infer_table_field_value_should_be(
         .get_parent::<LuaTableExpr>()
         .ok_or(InferFailReason::None)?;
     let parent_table_expr_type = infer_table_should_be(db, cache, parnet_table_expr)?;
-
     let index = LuaIndexMemberExpr::TableField(table_field.clone());
-    let reason = match infer_member_by_member_key(
-        db,
-        cache,
-        &parent_table_expr_type,
-        index.clone(),
-        &InferGuard::new(),
-    ) {
-        Ok(member_type) => return Ok(member_type),
-        Err(InferFailReason::FieldNotFound) => InferFailReason::FieldNotFound,
-        Err(err) => return Err(err),
-    };
-
-    match infer_member_by_operator(
+    match infer_member(
         db,
         cache,
         &parent_table_expr_type,
@@ -216,7 +200,7 @@ pub fn infer_table_field_value_should_be(
         return Ok(type_cache.as_type().clone());
     };
 
-    Err(reason)
+    Err(InferFailReason::FieldNotFound)
 }
 
 fn infer_table_type_by_callee(
@@ -274,17 +258,50 @@ fn infer_table_type_by_callee(
 
 /// 移除掉一些非`table`类型
 fn union_remove_non_table_type(db: &DbIndex, union: &Arc<LuaUnionType>) -> LuaType {
-    let mut result = LuaType::Unknown;
-    for typ in union.into_set().into_iter() {
-        match typ {
-            LuaType::Signature(_) | LuaType::DocFunction(_) => {}
-            _ if typ.is_string() || typ.is_number() || typ.is_boolean() => {}
-            _ => {
-                result = TypeOps::Union.apply(db, &result, &typ);
-            }
-        }
+    let result = TypeOps::union_all(
+        db,
+        union
+            .into_vec()
+            .into_iter()
+            .filter(|typ| may_accept_table_literal(db, typ, 0)),
+    );
+    if matches!(result, LuaType::Never) {
+        LuaType::Unknown
+    } else {
+        result
     }
-    result
+}
+
+fn may_accept_table_literal(db: &DbIndex, typ: &LuaType, depth: usize) -> bool {
+    if depth >= 16 {
+        return false;
+    }
+
+    match typ {
+        LuaType::Ref(type_id) => {
+            let Some(type_decl) = db.get_type_index().get_type_decl(type_id) else {
+                return true;
+            };
+            if !type_decl.is_alias() {
+                return true;
+            }
+
+            type_decl
+                .get_alias_ref()
+                .is_none_or(|alias_ref| may_accept_table_literal(db, alias_ref, depth + 1))
+        }
+        LuaType::Union(union) => union
+            .into_vec()
+            .iter()
+            .any(|typ| may_accept_table_literal(db, typ, depth + 1)),
+        LuaType::MultiLineUnion(union) => union
+            .get_unions()
+            .iter()
+            .any(|(typ, _)| may_accept_table_literal(db, typ, depth + 1)),
+        LuaType::Nil | LuaType::Never => false,
+        _ if typ.is_function() || typ.is_string() || typ.is_number() || typ.is_boolean() => false,
+        _ => true,
+    }
 }
 
 fn infer_table_field_type_by_parent(
@@ -294,18 +311,20 @@ fn infer_table_field_type_by_parent(
 ) -> InferResult {
     let member_id = LuaMemberId::new(field.get_syntax_id(), cache.get_file_id());
     if let Some(type_cache) = db.get_type_index().get_type_cache(&member_id.into()) {
-        let typ = type_cache.as_type();
-        match typ {
-            LuaType::TableConst(_) => {}
-            LuaType::Tuple(tuple) => {
-                let types = tuple.get_types();
-                // 这种情况下缓存的类型可能是不精确的
-                if tuple.is_infer_resolve() && types.len() == 1 && types[0].is_unknown() {
-                } else {
-                    return Ok(typ.clone());
+        if type_cache.is_doc() {
+            let typ = type_cache.as_type();
+            match typ {
+                LuaType::TableConst(_) => {}
+                LuaType::Tuple(tuple) => {
+                    let types = tuple.get_types();
+                    // 这种情况下缓存的类型可能是不精确的
+                    if tuple.is_infer_resolve() && types.len() == 1 && types[0].is_unknown() {
+                    } else {
+                        return Ok(typ.clone());
+                    }
                 }
+                typ => return Ok(typ.clone()),
             }
-            typ => return Ok(typ.clone()),
         }
     } else if field.is_value_field() {
         return infer_table_field_value_should_be(db, cache, field);
@@ -319,31 +338,13 @@ fn infer_table_field_type_by_parent(
     let parent_table_expr_type = infer_table_should_be(db, cache, parnet_table_expr)?;
 
     let index = LuaIndexMemberExpr::TableField(field);
-    let reason = match infer_member_by_member_key(
-        db,
-        cache,
-        &parent_table_expr_type,
-        index.clone(),
-        &InferGuard::new(),
-    ) {
-        Ok(member_type) => return Ok(member_type),
-        Err(InferFailReason::FieldNotFound) => InferFailReason::FieldNotFound,
-        Err(err) => return Err(err),
-    };
-
-    match infer_member_by_operator(
+    infer_member(
         db,
         cache,
         &parent_table_expr_type,
         index,
         &InferGuard::new(),
-    ) {
-        Ok(member_type) => return Ok(member_type),
-        Err(InferFailReason::FieldNotFound) => {}
-        Err(err) => return Err(err),
-    }
-
-    Err(reason)
+    )
 }
 
 fn infer_table_type_by_local(

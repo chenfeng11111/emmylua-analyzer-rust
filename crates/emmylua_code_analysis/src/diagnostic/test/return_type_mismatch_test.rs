@@ -5,7 +5,7 @@ mod tests {
     #[test]
     fn test_issue_242() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for_namespace(
+        assert!(ws.has_no_diagnostic_in_namespace(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@class A
@@ -22,7 +22,7 @@ mod tests {
         "#
         ));
 
-        assert!(ws.check_code_for_namespace(
+        assert!(ws.has_no_diagnostic_in_namespace(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 local setmetatable = setmetatable
@@ -38,7 +38,7 @@ mod tests {
         "#
         ));
 
-        assert!(ws.check_code_for_namespace(
+        assert!(ws.has_no_diagnostic_in_namespace(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@class A
@@ -59,7 +59,7 @@ mod tests {
     fn test_issue_220() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             --- @class A
@@ -80,7 +80,7 @@ mod tests {
     fn test_return_type_mismatch() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@class diagnostic.Test1
@@ -93,7 +93,7 @@ mod tests {
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@return string
@@ -103,7 +103,7 @@ mod tests {
         "#
         ));
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@class diagnostic.Test2
@@ -115,7 +115,7 @@ mod tests {
             end
         "#
         ));
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@return number
@@ -132,10 +132,244 @@ mod tests {
     }
 
     #[test]
+    fn test_discriminated_union_assignment_keeps_branch_narrowing() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@class Foo
+            ---@field kind "foo"
+            ---@field a integer
+
+            ---@class Bar
+            ---@field kind "bar"
+            ---@field b integer
+
+            ---@param x Foo|Bar
+            ---@return Foo
+            local function test(x)
+                if x.kind == "foo" then
+                    x = { kind = "foo", a = 1 }
+                    return x
+                end
+
+                return { kind = "foo", a = 2 }
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_discriminated_union_partial_assignment_keeps_branch_narrowing() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@class Foo
+            ---@field kind "foo"
+            ---@field a integer
+
+            ---@class Bar
+            ---@field kind "bar"
+            ---@field b integer
+
+            ---@param x Foo|Bar
+            ---@return Foo
+            local function test(x)
+                if x.kind == "foo" then
+                    x = {}
+                    x.kind = "foo"
+                    x.a = 1
+                    return x
+                end
+
+                return { kind = "foo", a = 2 }
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_discriminated_union_partial_literal_assignment_keeps_branch_narrowing() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@class Foo
+            ---@field kind "foo"
+            ---@field a integer
+
+            ---@class Bar
+            ---@field kind "bar"
+            ---@field b integer
+
+            ---@param x Foo|Bar
+            ---@return Foo
+            local function test(x)
+                if x.kind == "foo" then
+                    x = { kind = "foo" }
+                    x.a = 1
+                    return x
+                end
+
+                return { kind = "foo", a = 2 }
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_exact_string_reassignment_in_narrowed_branch_keeps_return_literal() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@param x string|number
+            ---@return "a"
+            local function test(x)
+                if x == 1 then
+                    x = "a"
+                    return x
+                end
+
+                return "a"
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_return_overload_mixed_guards_keep_return_narrowing() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@generic T, E
+            ---@param ok boolean
+            ---@param success T
+            ---@param failure E
+            ---@return boolean
+            ---@return T|E
+            ---@return_overload true, T
+            ---@return_overload false, E
+            local function pick(ok, success, failure)
+                if ok then
+                    return true, success
+                end
+                return false, failure
+            end
+
+            ---@param cond boolean
+            ---@return integer
+            local function test(cond)
+                local ok, result = pick(cond, 1, "err")
+
+                if ok == false then
+                    error(result)
+                end
+
+                if not ok then
+                    error(result)
+                end
+
+                return result
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_pcall_return_after_type_guard() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            --- @param a string|fun(): integer
+            --- @return integer?
+            function foo(a)
+                if type(a) == 'string' then
+                    return
+                end
+
+                local ok, result = pcall(a)
+                if not ok then
+                    return
+                end
+
+                return result
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_pcall_return_after_type_guard_with_table_arg() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            --- @param cb string|fun(a: {}): integer
+            --- @return integer?
+            function foo(cb)
+                if type(cb) == 'string' then
+                    return
+                end
+
+                local ok, result = pcall(cb, {})
+                if not ok then
+                    return
+                end
+
+                return result
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_pcall_return_array_after_error_guard() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@class Runner
+
+            ---@class File
+
+            ---@param specs string[]
+            ---@param runner Runner
+            ---@return File[] files
+            local function startTests(specs, runner)
+                local ok, result = pcall(function ()
+                    ---@type File[]
+                    local files
+
+                    return files
+                end)
+                if not ok then
+                    error(result)
+                end
+                ---@cast result - string
+
+                return result
+            end
+        "#
+        ));
+    }
+
+    #[test]
     fn test_variadic_return_type_mismatch() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@return number, any...
@@ -150,7 +384,7 @@ mod tests {
     fn test_issue_146() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             local function bar()
@@ -171,7 +405,7 @@ mod tests {
     fn test_issue_150() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::RedundantReturnValue,
             r#"
             function bar(a)
@@ -185,7 +419,7 @@ mod tests {
     fn test_return_dots_syntax_error() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::SyntaxError,
             r#"
             function bar()
@@ -193,7 +427,7 @@ mod tests {
             end
             "#
         ));
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::SyntaxError,
             r#"
             function bar()
@@ -207,7 +441,7 @@ mod tests {
     fn test_issue_167() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             --- @return integer?, integer?
@@ -226,7 +460,7 @@ mod tests {
     fn test_as_return_type() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             local function dd()
@@ -246,7 +480,7 @@ mod tests {
     fn test_1() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@return string?
@@ -263,7 +497,7 @@ mod tests {
     fn test_2() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@return any[]
@@ -280,7 +514,7 @@ mod tests {
     fn test_3() {
         let mut ws = VirtualWorkspace::new();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@return table<string, {old: any, new: any}>
@@ -297,7 +531,7 @@ mod tests {
     fn test_4() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
         // TODO 该测试被`setmetatable`强行覆盖, 未正常诊断`debug.setmetatable`
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@generic T
@@ -329,7 +563,7 @@ mod tests {
     fn test_issue_341() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             --- @return integer
@@ -346,7 +580,7 @@ mod tests {
     fn test_supper() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@class key: integer
@@ -363,7 +597,7 @@ mod tests {
     fn test_return_self() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@class UI
@@ -379,7 +613,7 @@ mod tests {
     #[test]
     fn test_issue_343() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 --- @return integer, integer
@@ -404,7 +638,7 @@ mod tests {
     #[test]
     fn test_issue_474() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
             ---@class Range4
@@ -427,7 +661,7 @@ mod tests {
     #[test]
     fn test_super_alias() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@namespace Test
@@ -450,7 +684,7 @@ mod tests {
     #[test]
     fn test_generic_type_extends() {
         let mut ws = VirtualWorkspace::new_with_init_std_lib();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@class AnonymousObserver<T>: Observer<T>
@@ -484,7 +718,7 @@ mod tests {
             end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
 
@@ -510,13 +744,123 @@ mod tests {
                 end
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::ReturnTypeMismatch,
             r#"
                 ---@return Observable<integer>
                 local function count()
                     return CountObservable:new()
                 end
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_generic_return_self() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+                --- @class MockContext<T = string>
+                local M
+
+                --- @return MockContext
+                function M:get()
+                    return self
+                end
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_asserted_array_member_return_field() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+        let code = r#"
+            --- @return { a: integer }
+            function foo()
+                local arr --- @type integer[]
+                local i --- @type integer?
+                local a --- @type integer?
+                i = _ --[[@as integer]]
+                a = assert(arr[i])
+                return { a = a }
+            end
+        "#;
+        assert!(ws.has_no_diagnostic(DiagnosticCode::ReturnTypeMismatch, code));
+        assert!(ws.has_no_diagnostic(DiagnosticCode::AssignTypeMismatch, code));
+    }
+
+    #[test]
+    fn test_and_or_function_guard_return() {
+        let mut ws = VirtualWorkspace::new_with_init_std_lib();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+                --- @param f string|(fun():string)
+                --- @return string
+                function foo(f)
+                    return type(f) == 'function' and f() or f
+                end
+            "#
+        ));
+    }
+
+    #[test]
+    fn test_generic_constraint_return_incompatible_type() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(!ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@class Animal
+            ---@field name string
+
+            ---@generic T: Animal
+            ---@param animal T
+            ---@return string
+            local function checkAnimal(animal)
+                return animal
+            end
+        "#
+        ));
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@class Animal
+            ---@field name string
+
+            ---@generic T: Animal
+            ---@param animal T
+            ---@return Animal
+            local function checkAnimal(animal)
+                return animal
+            end
+        "#
+        ));
+    }
+
+    #[test]
+    fn test_recursive_alias_field_return_before_class() {
+        let mut ws = VirtualWorkspace::new();
+
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::ReturnTypeMismatch,
+            r#"
+            ---@alias Recursive string | (Recursive[])
+
+            ---@class Container
+            ---@field recurse? Recursive
+
+            local A = {}
+
+            ---@param container? Container
+            ---@return Recursive
+            function A.return_recurse(container)
+                if container and container.recurse then
+                    return container.recurse
+                end
+                return A.return_recurse(container)
+            end
             "#
         ));
     }

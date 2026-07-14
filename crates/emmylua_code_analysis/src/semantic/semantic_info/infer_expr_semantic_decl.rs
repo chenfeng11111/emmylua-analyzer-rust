@@ -129,13 +129,10 @@ fn infer_require_module_semantic_decl(
     let first_arg = call_expr.get_args_list()?.get_args().next()?;
     let module_path = match first_arg {
         LuaExpr::LiteralExpr(literal_expr) => {
-            if let Some(literal_token) = literal_expr.get_literal() {
-                match literal_token {
-                    LuaLiteralToken::String(string_token) => string_token.get_value(),
-                    _ => return None,
-                }
-            } else {
-                return None;
+            let literal_token = literal_expr.get_literal()?;
+            match literal_token {
+                LuaLiteralToken::String(string_token) => string_token.get_value(),
+                _ => return None,
             }
         }
         _ => return None,
@@ -222,6 +219,26 @@ fn infer_closure_expr_semantic_decl(
                 level,
             )
         }
+        LuaStat::LocalStat(local_stat) => {
+            let local_name =
+                local_stat.get_local_name_by_value(LuaExpr::ClosureExpr(closure_expr))?;
+            let name_token = local_name.get_name_token()?;
+            infer_token_semantic_decl(db, cache, name_token.syntax().clone(), level)
+        }
+        LuaStat::AssignStat(assign_stat) => {
+            let (vars, exprs) = assign_stat.get_var_and_expr_list();
+            let idx = exprs.iter().position(|expr| {
+                matches!(expr, LuaExpr::ClosureExpr(ce) if ce.syntax() == closure_expr.syntax())
+            })?;
+            let var = vars.get(idx)?;
+            infer_expr_semantic_decl(
+                db,
+                cache,
+                var.clone().into(),
+                semantic_guard.next_level()?,
+                level,
+            )
+        }
         _ => None,
     }
 }
@@ -302,6 +319,20 @@ fn infer_member_semantic_decl_by_member_key(
             db,
             cache,
             intersection_type,
+            member_key,
+            semantic_guard.next_level()?,
+        ),
+        LuaType::TplRef(tpl) => infer_member_semantic_decl_by_member_key(
+            db,
+            cache,
+            tpl.get_constraint()?,
+            member_key,
+            semantic_guard.next_level()?,
+        ),
+        LuaType::StrTplRef(str_tpl) => infer_member_semantic_decl_by_member_key(
+            db,
+            cache,
+            str_tpl.get_constraint()?,
             member_key,
             semantic_guard.next_level()?,
         ),

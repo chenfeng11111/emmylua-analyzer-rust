@@ -5,7 +5,7 @@ mod test {
     #[test]
     fn test_issue_195() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             local ret = {} --- @type string[]
@@ -19,7 +19,7 @@ mod test {
     #[test]
     fn test_inject_field() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             ---@class test1
@@ -31,7 +31,7 @@ mod test {
         "#
         ));
 
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             ---@class test2
@@ -46,9 +46,29 @@ mod test {
     }
 
     #[test]
+    fn test_class_def_dynamic_key_in_method_is_allowed() {
+        let mut ws = VirtualWorkspace::new();
+        assert!(ws.has_no_diagnostic(
+            DiagnosticCode::InjectField,
+            r#"
+            ---@class TestBind
+            Bind = {}
+
+            ---@class TestFunc
+            ---@field call_name string
+            local M = {}
+
+            function M:call()
+                Bind[self.call_name] = 1
+            end
+        "#
+        ));
+    }
+
+    #[test]
     fn test_super_table() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             ---@class test1<T>: {[string]: number }, table<string, string>
@@ -64,7 +84,7 @@ mod test {
     #[test]
     fn test_object() {
         let mut ws = VirtualWorkspace::new();
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             ---@type { [number]: number }
@@ -78,7 +98,7 @@ mod test {
     #[test]
     fn test_self() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             ---@class Diagnostic.8_1
@@ -95,7 +115,7 @@ mod test {
     #[test]
     fn test_any_key() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             ---@type { [number]: number }
@@ -109,7 +129,7 @@ mod test {
     #[test]
     fn test_issue_264() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
                 local a = { 'a' }
@@ -133,7 +153,7 @@ mod test {
     #[test]
     fn test_tuple() {
         let mut ws = VirtualWorkspace::new();
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
                 local a = { 'a' }
@@ -141,7 +161,7 @@ mod test {
         "#
         ));
 
-        // assert!(!ws.check_code_for(
+        // assert!(!ws.has_no_diagnostic(
         //     DiagnosticCode::InjectField,
         //     r#"
         //         ---@type [ 'a' ]
@@ -157,7 +177,6 @@ mod test {
         ws.def_file(
             "a.lua",
             r#"
-            ---@export
             local export = {}
 
             export.a = 1
@@ -165,14 +184,14 @@ mod test {
             return export
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             local a = require("a")
             a.newField = 1
             "#,
         ));
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             local a = require("a")
@@ -187,20 +206,19 @@ mod test {
         ws.def_file(
             "a.lua",
             r#"
-            ---@export
             return {
                 a = 1
             }
             "#,
         );
-        assert!(!ws.check_code_for(
+        assert!(!ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             local a = require("a")
             a.newField = 1
             "#,
         ));
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             local a = require("a")
@@ -215,7 +233,7 @@ mod test {
         ws.def_file(
             "a.lua",
             r#"
-            --- @class (private) vim.var_accessor
+            --- @class (file) vim.var_accessor
             --- @field [string] any
             --- @field [integer] vim.var_accessor
 
@@ -225,7 +243,7 @@ mod test {
             vim.g = {}
             "#,
         );
-        assert!(ws.check_code_for(
+        assert!(ws.has_no_diagnostic(
             DiagnosticCode::InjectField,
             r#"
             if vim.g.aaa then

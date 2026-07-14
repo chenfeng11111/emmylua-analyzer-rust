@@ -6,7 +6,10 @@ use rowan::TextRange;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smol_str::SmolStr;
 
-use crate::{DbIndex, FileId, LuaMemberKey, LuaMemberOwner, TypeSubstitutor, instantiate_type_generic, InferGuard};
+use crate::{
+    DbIndex, FileId, LuaMemberKey, LuaMemberOwner, TypeSubstitutor, db_index::WorkspaceId,
+    instantiate_type_generic,
+};
 
 use super::{LuaType, LuaUnionType};
 
@@ -15,18 +18,18 @@ pub enum LuaDeclTypeKind {
     Class,
     Enum,
     Alias,
-    Attribute,
 }
 
 flags! {
     pub enum LuaTypeFlag: u8 {
-        None,
         Key,
         Partial,
         Exact,
         Meta,
         Constructor,
-        Private
+        Public,
+        Internal,
+        File
     }
 }
 
@@ -47,19 +50,19 @@ impl LuaTypeDecl {
         flag: FlagSet<LuaTypeFlag>,
         id: LuaTypeDeclId,
     ) -> Self {
+        let location = LuaDeclLocation {
+            file_id,
+            range,
+            flag,
+        };
         Self {
             simple_name: name,
-            locations: vec![LuaDeclLocation {
-                file_id,
-                range,
-                flag,
-            }],
+            locations: vec![location],
             id,
             extra: match kind {
                 LuaDeclTypeKind::Enum => LuaTypeExtra::Enum { base: None },
                 LuaDeclTypeKind::Class => LuaTypeExtra::Class,
                 LuaDeclTypeKind::Alias => LuaTypeExtra::Alias { origin: None },
-                LuaDeclTypeKind::Attribute => LuaTypeExtra::Attribute { typ: None },
             },
         }
     }
@@ -110,10 +113,6 @@ impl LuaTypeDecl {
         } else {
             false
         }
-    }
-
-    pub fn is_attribute(&self) -> bool {
-        matches!(self.extra, LuaTypeExtra::Attribute { .. })
     }
 
     pub fn is_exact(&self) -> bool {
@@ -197,20 +196,6 @@ impl LuaTypeDecl {
         }
     }
 
-    pub fn add_attribute_type(&mut self, attribute_type: LuaType) {
-        if let LuaTypeExtra::Attribute { typ } = &mut self.extra {
-            *typ = Some(attribute_type);
-        }
-    }
-
-    pub fn get_attribute_type(&self) -> Option<&LuaType> {
-        if let LuaTypeExtra::Attribute { typ: Some(typ) } = &self.extra {
-            Some(typ)
-        } else {
-            None
-        }
-    }
-
     pub fn merge_decl(&mut self, other: LuaTypeDecl) {
         self.locations.extend(other.locations);
     }
@@ -231,7 +216,7 @@ impl LuaTypeDecl {
                 let fake_type = match member_key {
                     LuaMemberKey::Name(name) => LuaType::DocStringConst(name.clone().into()),
                     LuaMemberKey::Integer(i) => LuaType::IntegerConst(*i),
-                    LuaMemberKey::ExprType(typ) => typ.clone(),
+                    LuaMemberKey::TypeKey(typ) => typ.clone(),
                     LuaMemberKey::None => continue,
                 };
 
@@ -260,7 +245,8 @@ impl LuaTypeDecl {
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum LuaTypeIdentifier {
     Global(SmolStr),
-    Local(FileId, SmolStr),
+    Internal(WorkspaceId, SmolStr),
+    File(FileId, SmolStr),
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -275,9 +261,15 @@ impl LuaTypeDeclId {
         }
     }
 
-    pub fn local(file_id: FileId, str: &str) -> Self {
+    pub fn file(file_id: FileId, str: &str) -> Self {
         Self {
-            id: ArcIntern::new(LuaTypeIdentifier::Local(file_id, SmolStr::new(str))),
+            id: ArcIntern::new(LuaTypeIdentifier::File(file_id, SmolStr::new(str))),
+        }
+    }
+
+    pub fn internal(workspace_id: WorkspaceId, str: &str) -> Self {
+        Self {
+            id: ArcIntern::new(LuaTypeIdentifier::Internal(workspace_id, SmolStr::new(str))),
         }
     }
 
@@ -288,7 +280,8 @@ impl LuaTypeDeclId {
     pub fn get_name(&self) -> &str {
         match self.id.as_ref() {
             LuaTypeIdentifier::Global(name) => name.as_ref(),
-            LuaTypeIdentifier::Local(_, name) => name.as_ref(),
+            LuaTypeIdentifier::Internal(_, name) => name.as_ref(),
+            LuaTypeIdentifier::File(_, name) => name.as_ref(),
         }
     }
 
@@ -302,7 +295,7 @@ impl LuaTypeDeclId {
         }) as _
     }
 
-    pub fn collect_super_types(&self, db: &DbIndex, collected_types: &mut Vec<LuaType>) {
+    fn collect_super_types(&self, db: &DbIndex, collected_types: &mut Vec<LuaType>) {
         // 必须广度优先
         let mut queue = Vec::new();
         queue.push(self.clone());
@@ -334,6 +327,10 @@ impl LuaTypeDeclId {
         self.collect_super_types(db, &mut collected_types);
         collected_types
     }
+
+    pub fn is_local(&self) -> bool {
+        matches!(self.id.as_ref(), LuaTypeIdentifier::File(_, _))
+    }
 }
 
 impl Serialize for LuaTypeDeclId {
@@ -343,8 +340,12 @@ impl Serialize for LuaTypeDeclId {
     {
         match self.id.as_ref() {
             LuaTypeIdentifier::Global(name) => serializer.serialize_str(name.as_ref()),
-            LuaTypeIdentifier::Local(file_id, name) => {
-                let s = format!("{}|{}", file_id.id, &name);
+            LuaTypeIdentifier::Internal(workspace_id, name) => {
+                let s = format!("ws:{}|{}", workspace_id.id, name);
+                serializer.serialize_str(&s)
+            }
+            LuaTypeIdentifier::File(file_id, name) => {
+                let s = format!("{}|{}", file_id.id, name);
                 serializer.serialize_str(&s)
             }
         }
@@ -370,8 +371,15 @@ impl<'de> Deserialize<'de> for LuaTypeDeclId {
                 E: serde::de::Error,
             {
                 if let Some((file_id_str, name)) = value.split_once('|') {
+                    if let Some(workspace_id_str) = file_id_str.strip_prefix("ws:") {
+                        let workspace_id = workspace_id_str.parse::<u32>().map_err(E::custom)?;
+                        return Ok(LuaTypeDeclId::internal(
+                            WorkspaceId { id: workspace_id },
+                            name,
+                        ));
+                    }
                     let file_id = file_id_str.parse::<u32>().map_err(E::custom)?;
-                    Ok(LuaTypeDeclId::local(FileId { id: file_id }, name))
+                    Ok(LuaTypeDeclId::file(FileId { id: file_id }, name))
                 } else {
                     Ok(LuaTypeDeclId::global(value))
                 }
@@ -394,5 +402,4 @@ pub enum LuaTypeExtra {
     Enum { base: Option<LuaType> },
     Class,
     Alias { origin: Option<LuaType> },
-    Attribute { typ: Option<LuaType> },
 }

@@ -2,13 +2,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     LuaGenericType, LuaMemberOwner, LuaType, LuaTypeCache, LuaTypeDeclId, RenderLevel,
-    TypeSubstitutor, humanize_type, instantiate_type_generic,
+    TypeSubstitutor, complete_type_generic_args_in_type, humanize_type, instantiate_type_generic,
     semantic::{member::find_members, type_check::type_check_context::TypeCheckContext},
 };
 
 use super::{
-    TypeCheckResult, check_general_type_compact, type_check_fail_reason::TypeCheckFailReason,
-    type_check_guard::TypeCheckGuard,
+    TypeCheckResult, check_general_type_compact, instantiate_generic_alias_origin,
+    type_check_fail_reason::TypeCheckFailReason, type_check_guard::TypeCheckGuard,
 };
 
 pub fn check_generic_type_compact(
@@ -17,23 +17,38 @@ pub fn check_generic_type_compact(
     compact_type: &LuaType,
     check_guard: TypeCheckGuard,
 ) -> TypeCheckResult {
-    let base_id = source_generic.get_base_type_id();
-    if let Some(decl) = context
-        .db
-        .get_type_index()
-        .get_type_decl(&source_generic.get_base_type_id())
-        && decl.is_alias()
-    {
-        let substitutor =
-            TypeSubstitutor::from_alias(source_generic.get_params().clone(), base_id.clone());
-        if let Some(alias_origin) = decl.get_alias_origin(context.db, Some(&substitutor)) {
-            return check_general_type_compact(
-                context,
-                &alias_origin,
-                compact_type,
-                check_guard.next_level()?,
-            );
+    if let Some(alias_origin) = instantiate_generic_alias_origin(context.db, source_generic) {
+        // Generic alias 期望类型需要接受实际 union 的每个分支.
+        if let LuaType::Union(compact_union) = compact_type {
+            for compact_sub_type in compact_union.into_vec() {
+                check_generic_type_compact(
+                    context,
+                    source_generic,
+                    &compact_sub_type,
+                    check_guard.next_level()?,
+                )?;
+            }
+            return Ok(());
         }
+
+        // 递归 generic alias 的直接成员已经属于 alias 本身, 提前通过避免继续展开自引用.
+        let origin_contains_compact = match &alias_origin {
+            LuaType::Union(origin_union) => origin_union
+                .into_vec()
+                .iter()
+                .any(|origin_sub_type| origin_sub_type == compact_type),
+            _ => alias_origin == *compact_type,
+        };
+        if origin_contains_compact {
+            return Ok(());
+        }
+
+        return check_general_type_compact(
+            context,
+            &alias_origin,
+            compact_type,
+            check_guard.next_level()?,
+        );
     }
 
     // 不检查尚未实例化的泛型类
@@ -94,6 +109,7 @@ pub fn check_generic_type_compact(
             check_generic_type_compact_ref_type(
                 context,
                 source_generic,
+                compact_type,
                 ref_id,
                 check_guard.next_level()?,
             )
@@ -226,6 +242,7 @@ fn check_generic_type_compact_table(
 fn check_generic_type_compact_ref_type(
     context: &mut TypeCheckContext,
     source_generic: &LuaGenericType,
+    compact_type: &LuaType,
     ref_id: &LuaTypeDeclId,
     check_guard: TypeCheckGuard,
 ) -> TypeCheckResult {
@@ -244,6 +261,18 @@ fn check_generic_type_compact_ref_type(
                 check_guard.next_level()?,
             );
         }
+    }
+
+    // TODO: 这是对于 self 转换为 def/ref 后的处理, 转换后得到的类型并不包含泛型参数, 因此我们需要在这里再推导一次
+    // 然而, 在 infer 阶段将 self 推断为包含默认值的泛型类型是否更合适呢? 值得商榷
+    let completed_compact_type = complete_type_generic_args_in_type(context.db, compact_type);
+    if matches!(completed_compact_type, LuaType::Generic(_)) {
+        return check_generic_type_compact(
+            context,
+            source_generic,
+            &completed_compact_type,
+            check_guard.next_level()?,
+        );
     }
 
     for super_type in context

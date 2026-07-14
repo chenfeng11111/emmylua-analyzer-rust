@@ -5,17 +5,42 @@ use emmylua_parser::{
     LuaAst, LuaAstNode, LuaClosureExpr, LuaComment, LuaDocTag, LuaDocTypeFlag, LuaSyntaxKind,
     LuaSyntaxToken, LuaTokenKind,
 };
-use lsp_types::CompletionItem;
+use lsp_types::{CompletionItem, CompletionItemTag, Documentation, MarkupContent, MarkupKind};
 
 use crate::handlers::completion::completion_builder::CompletionBuilder;
 
-pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
+use super::{CompletionProvider, ProviderDecision};
+
+pub struct DocNameTokenProvider;
+
+impl CompletionProvider for DocNameTokenProvider {
+    fn name(&self) -> &'static str {
+        "doc_name_token"
+    }
+
+    fn supports(&self, builder: &CompletionBuilder) -> bool {
+        supports_provider(builder)
+    }
+
+    fn complete(&self, builder: &mut CompletionBuilder) -> ProviderDecision {
+        if complete_provider(builder).is_some() {
+            ProviderDecision::Stop
+        } else {
+            ProviderDecision::NoMatch
+        }
+    }
+}
+
+fn supports_provider(builder: &CompletionBuilder) -> bool {
+    get_doc_completion_expected(&builder.trigger_token).is_some()
+}
+
+fn complete_provider(builder: &mut CompletionBuilder) -> Option<()> {
     if builder.is_cancelled() {
         return None;
     }
 
-    let trigger_token = &builder.trigger_token;
-    let expected = get_doc_completion_expected(trigger_token)?;
+    let expected = get_doc_completion_expected(&builder.trigger_token)?;
     match expected {
         DocCompletionExpected::ParamName => {
             add_tag_param_name_completion(builder);
@@ -38,12 +63,7 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
         DocCompletionExpected::Using => {
             add_tag_using_completion(builder);
         }
-        DocCompletionExpected::Export => {
-            add_tag_export_completion(builder);
-        }
     }
-
-    builder.stop_here();
 
     Some(())
 }
@@ -77,7 +97,6 @@ fn get_doc_completion_expected(trigger_token: &LuaSyntaxToken) -> Option<DocComp
                 }
                 LuaTokenKind::TkTagNamespace => Some(DocCompletionExpected::Namespace),
                 LuaTokenKind::TkTagUsing => Some(DocCompletionExpected::Using),
-                LuaTokenKind::TkTagExport => Some(DocCompletionExpected::Export),
                 LuaTokenKind::TkComma => {
                     let parent = left_token.parent()?;
                     match parent.kind().into() {
@@ -132,7 +151,6 @@ enum DocCompletionExpected {
     TypeFlag(LuaDocTypeFlag),
     Namespace,
     Using,
-    Export,
 }
 
 fn add_tag_param_name_completion(builder: &mut CompletionBuilder) -> Option<()> {
@@ -225,42 +243,121 @@ fn add_tag_diagnostic_code_completion(builder: &mut CompletionBuilder) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TypeFlagCompletion {
+    Key,
+    Partial,
+    Exact,
+    Constructor,
+    Public,
+    Internal,
+    File,
+    Private,
+}
+
+impl TypeFlagCompletion {
+    fn iter() -> impl Iterator<Item = Self> {
+        [
+            Self::Key,
+            Self::Partial,
+            Self::Exact,
+            Self::Constructor,
+            Self::Public,
+            Self::Internal,
+            Self::File,
+            Self::Private,
+        ]
+        .into_iter()
+    }
+
+    fn flag(self) -> LuaTypeFlag {
+        match self {
+            Self::Key => LuaTypeFlag::Key,
+            Self::Partial => LuaTypeFlag::Partial,
+            Self::Exact => LuaTypeFlag::Exact,
+            Self::Constructor => LuaTypeFlag::Constructor,
+            Self::Public => LuaTypeFlag::Public,
+            Self::Internal => LuaTypeFlag::Internal,
+            Self::File | Self::Private => LuaTypeFlag::File,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Key => "key",
+            Self::Partial => "partial",
+            Self::Exact => "exact",
+            Self::Constructor => "constructor",
+            Self::Public => "public",
+            Self::Internal => "internal",
+            Self::File => "file",
+            Self::Private => "private",
+        }
+    }
+
+    fn is_deprecated(self) -> bool {
+        matches!(self, Self::Private)
+    }
+}
+
 fn add_tag_type_flag_completion(
     builder: &mut CompletionBuilder,
     node: LuaDocTypeFlag,
 ) -> Option<()> {
-    let mut flags = vec![(LuaTypeFlag::Partial, "partial")];
+    let flags: &[TypeFlagCompletion] = match LuaDocTag::cast(node.syntax().parent()?)? {
+        LuaDocTag::Alias(_) => &[
+            TypeFlagCompletion::Internal,
+            TypeFlagCompletion::File,
+            TypeFlagCompletion::Public,
+            TypeFlagCompletion::Private,
+        ],
+        LuaDocTag::Class(_) => &[
+            TypeFlagCompletion::Partial,
+            TypeFlagCompletion::Internal,
+            TypeFlagCompletion::Exact,
+            TypeFlagCompletion::Constructor,
+            TypeFlagCompletion::File,
+            TypeFlagCompletion::Public,
+            TypeFlagCompletion::Private,
+        ],
+        LuaDocTag::Enum(_) => &[
+            TypeFlagCompletion::Key,
+            TypeFlagCompletion::Partial,
+            TypeFlagCompletion::Internal,
+            TypeFlagCompletion::File,
+            TypeFlagCompletion::Public,
+            TypeFlagCompletion::Private,
+        ],
+        _ => &[],
+    };
 
-    match LuaDocTag::cast(node.syntax().parent()?)? {
-        LuaDocTag::Alias(_) => {
-            flags.push((LuaTypeFlag::Private, "private"));
-        }
-        LuaDocTag::Class(_) => {
-            flags.push((LuaTypeFlag::Exact, "exact"));
-            flags.push((LuaTypeFlag::Constructor, "constructor"));
-            flags.push((LuaTypeFlag::Private, "private"));
-        }
-        LuaDocTag::Enum(_) => {
-            flags.insert(0, (LuaTypeFlag::Key, "key"));
-            flags.push((LuaTypeFlag::Exact, "exact"));
-            flags.push((LuaTypeFlag::Private, "private"));
-        }
-        _ => {}
-    }
-    // 已存在的属性
-    let mut existing_flags = HashSet::new();
+    // Existing type flags include legacy aliases, so private and file exclude each other.
+    let mut existing_flags = Vec::new();
     for token in node.get_attrib_tokens() {
-        let name_text = token.get_name_text().to_string();
-        existing_flags.insert(name_text);
+        let name_text = token.get_name_text();
+        if let Some(completion) =
+            TypeFlagCompletion::iter().find(|completion| completion.label() == name_text)
+        {
+            existing_flags.push(completion.flag());
+        }
     }
 
-    for (_, name) in flags.iter() {
-        if existing_flags.contains(*name) {
+    for (sorted_index, completion) in flags.iter().enumerate() {
+        if existing_flags.contains(&completion.flag()) {
             continue;
         }
+        let label = completion.label();
         let completion_item = CompletionItem {
-            label: name.to_string(),
+            label: label.to_string(),
             kind: Some(lsp_types::CompletionItemKind::ENUM_MEMBER),
+            documentation: Some(Documentation::MarkupContent(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: t!(format!("completion.typeFlag.{}", label)).to_string(),
+            })),
+            sort_text: Some(format!("{:03}", sorted_index)),
+            tags: completion
+                .is_deprecated()
+                .then(|| vec![CompletionItemTag::DEPRECATED]),
             ..Default::default()
         };
         builder.add_completion_item(completion_item);
@@ -306,19 +403,6 @@ fn add_tag_using_completion(builder: &mut CompletionBuilder) {
             kind: Some(lsp_types::CompletionItemKind::MODULE),
             sort_text: Some(format!("{:03}", sorted_index)),
             insert_text: Some(namespace.to_string()),
-            ..Default::default()
-        };
-        builder.add_completion_item(completion_item);
-    }
-}
-
-fn add_tag_export_completion(builder: &mut CompletionBuilder) {
-    let key = ["namespace", "global"];
-    for (sorted_index, key) in key.iter().enumerate() {
-        let completion_item = CompletionItem {
-            label: key.to_string(),
-            kind: Some(lsp_types::CompletionItemKind::ENUM_MEMBER),
-            sort_text: Some(format!("{:03}", sorted_index)),
             ..Default::default()
         };
         builder.add_completion_item(completion_item);

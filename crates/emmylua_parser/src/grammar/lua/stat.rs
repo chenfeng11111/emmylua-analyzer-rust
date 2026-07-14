@@ -1,6 +1,9 @@
 use crate::{
-    LuaLanguageLevel,
-    grammar::{ParseFailReason, ParseResult, lua::is_statement_start_token},
+    LuaFeatures, LuaLanguageLevel,
+    grammar::{
+        ParseFailReason, ParseResult,
+        lua::{expr::parse_simple_expr, is_statement_start_token},
+    },
     kind::{LuaSyntaxKind, LuaTokenKind},
     parser::{CompleteMarker, LuaParser, MarkerEventContainer},
     parser_error::LuaParseError,
@@ -239,12 +242,14 @@ fn parse_stat(p: &mut LuaParser) -> ParseResult {
         LuaTokenKind::TkLocal => parse_local(p)?,
         LuaTokenKind::TkReturn => parse_return(p)?,
         LuaTokenKind::TkBreak => parse_break(p)?,
+        LuaTokenKind::TkContinue => try_parse_continue(p)?,
+        LuaTokenKind::TkConst => try_parse_const(p)?,
         LuaTokenKind::TkDo => parse_do(p)?,
         LuaTokenKind::TkRepeat => parse_repeat(p)?,
         LuaTokenKind::TkGoto => parse_goto(p)?,
         LuaTokenKind::TkDbColon => parse_label_stat(p)?,
         LuaTokenKind::TkSemicolon => parse_empty_stat(p)?,
-        _ => parse_assign_or_expr_or_global_stat(p)?,
+        _ => parse_assign_or_expr_or_soft_keyword_stat(p)?,
     };
 
     Ok(cm)
@@ -588,7 +593,7 @@ fn parse_local(p: &mut LuaParser) -> ParseResult {
             parse_variable_name_list(p, true)?;
 
             // 可选的初始化表达式
-            if p.current_token().is_assign_op() {
+            if p.current_token() == LuaTokenKind::TkAssign {
                 p.bump();
                 if parse_expr_list_impl(p).is_err() {
                     push_expr_error_lazy(p, || t!("expected initialization expression after '='"));
@@ -609,7 +614,7 @@ fn parse_local(p: &mut LuaParser) -> ParseResult {
 
                 parse_variable_name_list(p, true)?;
 
-                if p.current_token().is_assign_op() {
+                if p.current_token() == LuaTokenKind::TkAssign {
                     p.bump();
                     if parse_expr_list_impl(p).is_err() {
                         push_expr_error_lazy(p, || {
@@ -636,6 +641,55 @@ fn parse_local(p: &mut LuaParser) -> ParseResult {
             ));
 
             return Err(ParseFailReason::UnexpectedToken);
+        }
+    }
+
+    if_token_bump(p, LuaTokenKind::TkSemicolon);
+    Ok(m.complete(p))
+}
+
+fn try_parse_const(p: &mut LuaParser) -> ParseResult {
+    let mut m = p.mark(LuaSyntaxKind::ConstStat);
+    match p.peek_next_token() {
+        LuaTokenKind::TkFunction => {
+            p.set_current_token_kind(LuaTokenKind::TkConst);
+            p.bump(); // consume 'const'
+            p.bump(); // consume 'function'
+            m.set_kind(p, LuaSyntaxKind::LocalFuncStat);
+
+            match parse_local_name(p, false) {
+                Ok(_) => {}
+                Err(_) => {
+                    p.push_error(LuaParseError::syntax_error_from(
+                        &t!("expected function name after 'const function'"),
+                        p.current_token_range(),
+                    ));
+                }
+            }
+            match parse_closure_expr(p) {
+                Ok(_) => {}
+                Err(_) => {
+                    p.push_error(LuaParseError::syntax_error_from(
+                        &t!("invalid function definition"),
+                        p.current_token_range(),
+                    ));
+                }
+            }
+        }
+        LuaTokenKind::TkName => {
+            p.set_current_token_kind(LuaTokenKind::TkConst);
+            p.bump(); // consume 'const'
+            parse_variable_name_list(p, false)?;
+
+            if p.current_token() == LuaTokenKind::TkAssign {
+                p.bump();
+                if parse_expr_list_impl(p).is_err() {
+                    push_expr_error_lazy(p, || t!("expected initialization expression after '='"));
+                }
+            }
+        }
+        _ => {
+            return Ok(m.undo(p));
         }
     }
 
@@ -683,7 +737,7 @@ fn parse_attrib(p: &mut LuaParser) -> ParseResult {
             ));
         }
     }
-    if !p.parse_config.support_local_attrib() {
+    if !p.parse_config.support(LuaFeatures::LocalAttrib) {
         p.errors.push(LuaParseError::syntax_error_from(
             &t!(
                 "local attribute is not supported for current version: %{level}",
@@ -713,6 +767,27 @@ fn parse_return(p: &mut LuaParser) -> ParseResult {
 fn parse_break(p: &mut LuaParser) -> ParseResult {
     let m = p.mark(LuaSyntaxKind::BreakStat);
     p.bump();
+    if_token_bump(p, LuaTokenKind::TkSemicolon);
+    Ok(m.complete(p))
+}
+
+fn try_parse_continue(p: &mut LuaParser) -> ParseResult {
+    let m = p.mark(LuaSyntaxKind::ContinueStat);
+    match p.peek_next_token() {
+        LuaTokenKind::TkEnd
+        | LuaTokenKind::TkElseIf
+        | LuaTokenKind::TkElse
+        | LuaTokenKind::TkEof
+        | LuaTokenKind::TkUntil
+        | LuaTokenKind::TkSemicolon => {
+            p.set_current_token_kind(LuaTokenKind::TkContinue);
+            p.bump();
+        }
+        _ => {
+            return Ok(m.undo(p));
+        }
+    }
+
     if_token_bump(p, LuaTokenKind::TkSemicolon);
     Ok(m.complete(p))
 }
@@ -817,15 +892,23 @@ fn try_parse_global_stat(p: &mut LuaParser) -> ParseResult {
     Ok(m.complete(p))
 }
 
-fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
-    if p.parse_config.level >= LuaLanguageLevel::Lua55 && p.current_token() == LuaTokenKind::TkName
-    {
-        let token_text = p.current_token_text();
-        if token_text == "global" {
-            let cm = try_parse_global_stat(p)?;
-            if !cm.is_invalid() {
-                return Ok(cm);
-            }
+fn try_soft_keyword_stat(p: &mut LuaParser) -> ParseResult {
+    let keyword = p.current_token_text();
+    match keyword {
+        "global" if p.parse_config.support(LuaFeatures::GlobalDeclaration) => {
+            try_parse_global_stat(p)
+        }
+        "const" if p.parse_config.support(LuaFeatures::ConstDeclaration) => try_parse_const(p),
+        "continue" if p.parse_config.support(LuaFeatures::Continue) => try_parse_continue(p),
+        _ => Ok(CompleteMarker::empty()),
+    }
+}
+
+fn parse_assign_or_expr_or_soft_keyword_stat(p: &mut LuaParser) -> ParseResult {
+    if p.current_token() == LuaTokenKind::TkName {
+        let cm = try_soft_keyword_stat(p)?;
+        if !cm.is_invalid() {
+            return Ok(cm);
         }
     }
 
@@ -833,7 +916,7 @@ fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
     let range = p.current_token_range();
 
     // 解析第一个表达式
-    let cm = match parse_expr(p) {
+    let cm = match parse_simple_expr(p) {
         Ok(cm) => cm,
         Err(err) => {
             p.push_error(LuaParseError::syntax_error_from(
@@ -860,7 +943,10 @@ fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
     }
 
     // 验证左值
-    if !matches!(cm.kind, LuaSyntaxKind::NameExpr | LuaSyntaxKind::IndexExpr) {
+    if !matches!(
+        cm.kind,
+        LuaSyntaxKind::NameExpr | LuaSyntaxKind::IndexExpr | LuaSyntaxKind::SafeIndexExpr
+    ) {
         p.push_error(LuaParseError::syntax_error_from(
             &t!("invalid left-hand side in assignment (expected variable or table index)"),
             range,
@@ -869,14 +955,34 @@ fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
         return Err(ParseFailReason::UnexpectedToken);
     }
 
+    // single assignment
+    if is_compound_assignment_start(p) {
+        if p.current_token() == LuaTokenKind::TkNe {
+            p.set_current_token_kind(LuaTokenKind::TkXorAssign);
+        }
+        p.bump(); // consume the XOR-assign operator
+        parse_expr(p).map_err(|_| {
+            p.push_error(LuaParseError::syntax_error_from(
+                &t!("expected expression after assignment operator"),
+                p.current_token_range(),
+            ));
+            ParseFailReason::UnexpectedToken
+        })?;
+
+        if_token_bump(p, LuaTokenKind::TkSemicolon);
+        return Ok(m.complete(p));
+    }
+
     // 解析更多左值（如果有逗号）
     while p.current_token() == LuaTokenKind::TkComma {
         p.bump();
-        match parse_expr(p) {
+        match parse_simple_expr(p) {
             Ok(expr_cm) => {
                 if !matches!(
                     expr_cm.kind,
-                    LuaSyntaxKind::NameExpr | LuaSyntaxKind::IndexExpr
+                    LuaSyntaxKind::NameExpr
+                        | LuaSyntaxKind::IndexExpr
+                        | LuaSyntaxKind::SafeIndexExpr
                 ) {
                     p.push_error(LuaParseError::syntax_error_from(
                         &t!(
@@ -897,12 +1003,17 @@ fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
     }
 
     // 期望赋值操作符
-    if p.current_token().is_assign_op() {
+    if p.current_token() == LuaTokenKind::TkAssign {
         p.bump();
 
         // 解析右值表达式列表
-        if parse_expr_list_impl(p).is_err() {
-            push_expr_error_lazy(p, || t!("expected expression after '=' in assignment"));
+        if let Err(e) = parse_expr_list_impl(p) {
+            push_expr_error_lazy(p, || {
+                t!(
+                    "expected expression after '=' in assignment, got error: %{error}",
+                    error = e
+                )
+            });
         }
     } else {
         p.push_error(LuaParseError::syntax_error_from(
@@ -915,6 +1026,11 @@ fn parse_assign_or_expr_or_global_stat(p: &mut LuaParser) -> ParseResult {
 
     if_token_bump(p, LuaTokenKind::TkSemicolon);
     Ok(m.complete(p))
+}
+
+fn is_compound_assignment_start(p: &LuaParser) -> bool {
+    (p.current_token() == LuaTokenKind::TkNe && p.parse_config.support(LuaFeatures::XorAssign))
+        || p.current_token().is_compound_assign_op()
 }
 
 fn parse_label_stat(p: &mut LuaParser) -> ParseResult {

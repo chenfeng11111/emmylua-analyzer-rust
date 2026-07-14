@@ -70,52 +70,58 @@ fn resolve_member_type(
 
             match resolve_state {
                 MemberTypeResolveState::All => {
-                    let mut typ = LuaType::Unknown;
+                    let mut types = Vec::new();
                     for member in members {
-                        typ = TypeOps::Union.apply(
-                            db,
-                            &typ,
+                        types.push(
                             db.get_type_index()
                                 .get_type_cache(&member.get_id().into())
                                 .ok_or(InferFailReason::UnResolveMemberType(member.get_id()))?
-                                .as_type(),
+                                .as_type()
+                                .clone(),
                         );
                     }
-                    Ok(typ)
+                    Ok(TypeOps::union_all(db, types))
                 }
                 MemberTypeResolveState::Meta => {
-                    let mut typ = LuaType::Unknown;
+                    let mut types = Vec::new();
+                    let mut last_meta_types = Vec::new();
                     for member in &members {
                         let feature = member.get_feature();
                         if feature.is_meta_decl() {
-                            typ = TypeOps::Union.apply(
-                                db,
-                                &typ,
-                                db.get_type_index()
-                                    .get_type_cache(&member.get_id().into())
-                                    .ok_or(InferFailReason::UnResolveMemberType(member.get_id()))?
-                                    .as_type(),
-                            );
+                            let member_type = db
+                                .get_type_index()
+                                .get_type_cache(&member.get_id().into())
+                                .ok_or(InferFailReason::UnResolveMemberType(member.get_id()))?
+                                .as_type();
+                            last_meta_types.push(member_type.clone());
+                            if check_member_version(db, LuaSemanticDeclId::Member(member.get_id()))
+                            {
+                                types.push(member_type.clone());
+                            }
                         }
                     }
-                    Ok(typ)
+                    let typ = TypeOps::union_all(db, types);
+                    if typ == LuaType::Never {
+                        Ok(TypeOps::union_all(db, last_meta_types))
+                    } else {
+                        Ok(typ)
+                    }
                 }
                 MemberTypeResolveState::FileDecl => {
-                    let mut typ = LuaType::Unknown;
+                    let mut types = Vec::new();
                     for member in &members {
                         let feature = member.get_feature();
                         if feature.is_file_decl() {
-                            typ = TypeOps::Union.apply(
-                                db,
-                                &typ,
+                            types.push(
                                 db.get_type_index()
                                     .get_type_cache(&member.get_id().into())
                                     .ok_or(InferFailReason::UnResolveMemberType(member.get_id()))?
-                                    .as_type(),
+                                    .as_type()
+                                    .clone(),
                             );
                         }
                     }
-                    Ok(typ)
+                    Ok(TypeOps::union_all(db, types))
                 }
             }
         }
@@ -159,14 +165,19 @@ fn resolve_type_owner_member_id(
                     None
                 }
                 MemberTypeResolveState::Meta => {
+                    let mut last_meta_member_id = None;
                     for member in &members {
                         let feature = member.get_feature();
                         if feature.is_meta_decl() {
-                            return Some(member.get_id());
+                            last_meta_member_id = Some(member.get_id());
+                            if check_member_version(db, LuaSemanticDeclId::Member(member.get_id()))
+                            {
+                                return Some(member.get_id());
+                            }
                         }
                     }
 
-                    None
+                    last_meta_member_id
                 }
                 MemberTypeResolveState::FileDecl => {
                     for member in &members {

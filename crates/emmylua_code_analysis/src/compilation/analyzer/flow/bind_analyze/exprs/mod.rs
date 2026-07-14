@@ -2,13 +2,15 @@ mod bind_binary_expr;
 
 use emmylua_parser::{
     LuaAst, LuaAstNode, LuaCallExpr, LuaClosureExpr, LuaExpr, LuaIndexExpr, LuaNameExpr,
-    LuaTableExpr, LuaUnaryExpr,
+    LuaTableExpr, LuaTernaryExpr, LuaUnaryExpr, UnaryOperator,
 };
 
 use crate::{
     FlowId, FlowNodeKind,
     compilation::analyzer::flow::{
-        bind_analyze::{bind_each_child, exprs::bind_binary_expr::is_binary_logical},
+        bind_analyze::{
+            bind_each_child, exprs::bind_binary_expr::is_binary_logical, finish_flow_label,
+        },
         binder::FlowBinder,
     },
 };
@@ -54,6 +56,7 @@ pub fn bind_expr(binder: &mut FlowBinder, expr: LuaExpr, current: FlowId) -> Flo
         LuaExpr::IndexExpr(index_expr) => bind_index_expr(binder, index_expr, current),
         LuaExpr::BinaryExpr(binary_expr) => bind_binary_expr(binder, binary_expr, current),
         LuaExpr::UnaryExpr(unary_expr) => bind_unary_expr(binder, unary_expr, current),
+        LuaExpr::TernaryExpr(ternary_expr) => bind_ternary_expr(binder, ternary_expr, current),
     };
 
     current
@@ -92,7 +95,31 @@ pub fn bind_index_expr(
     current: FlowId,
 ) -> Option<()> {
     binder.bind_syntax_node(index_expr.get_syntax_id(), current);
+    if index_expr.is_safe_index() {
+        return bind_safe_index_expr(binder, index_expr, current);
+    }
     bind_each_child(binder, LuaAst::LuaIndexExpr(index_expr.clone()), current);
+    Some(())
+}
+
+fn bind_safe_index_expr(
+    binder: &mut FlowBinder,
+    index_expr: LuaIndexExpr,
+    current: FlowId,
+) -> Option<()> {
+    let prefix_expr = index_expr.get_prefix_expr()?;
+
+    let pre_access = binder.create_branch_label();
+    bind_condition_expr(
+        binder,
+        prefix_expr,
+        current,
+        pre_access,
+        binder.false_target,
+    );
+    let current = finish_flow_label(binder, pre_access, current);
+
+    bind_each_child(binder, LuaAst::LuaIndexExpr(index_expr), current);
     Some(())
 }
 
@@ -113,6 +140,24 @@ pub fn bind_unary_expr(
     current: FlowId,
 ) -> Option<()> {
     let inner_expr = unary_expr.get_expr()?;
+
+    if unary_expr
+        .get_op_token()
+        .is_some_and(|op| op.get_op() == UnaryOperator::OpNot)
+    {
+        let old_true_target = binder.true_target;
+        let old_false_target = binder.false_target;
+
+        // not 会反转条件出口, 内层 and/or 的短路分支也要落到反转后的路径.
+        binder.true_target = old_false_target;
+        binder.false_target = old_true_target;
+        bind_expr(binder, inner_expr, current);
+        binder.true_target = old_true_target;
+        binder.false_target = old_false_target;
+
+        return Some(());
+    }
+
     bind_expr(binder, inner_expr, current);
     Some(())
 }
@@ -123,5 +168,45 @@ pub fn bind_call_expr(
     current: FlowId,
 ) -> Option<()> {
     bind_each_child(binder, LuaAst::LuaCallExpr(call_expr.clone()), current);
+    Some(())
+}
+
+fn bind_ternary_expr(
+    binder: &mut FlowBinder,
+    ternary_expr: LuaTernaryExpr,
+    current: FlowId,
+) -> Option<()> {
+    let condition = ternary_expr.get_condition_expr()?;
+    let (true_expr, false_expr) = ternary_expr.get_true_false_exprs()?;
+
+    let true_branch_label = binder.create_branch_label();
+    let false_branch_label = binder.create_branch_label();
+
+    bind_condition_expr(
+        binder,
+        condition,
+        current,
+        true_branch_label,
+        false_branch_label,
+    );
+
+    let true_branch_start = finish_flow_label(binder, true_branch_label, binder.unreachable);
+    bind_condition_expr(
+        binder,
+        true_expr,
+        true_branch_start,
+        binder.true_target,
+        binder.false_target,
+    );
+
+    let false_branch_start = finish_flow_label(binder, false_branch_label, binder.unreachable);
+    bind_condition_expr(
+        binder,
+        false_expr,
+        false_branch_start,
+        binder.true_target,
+        binder.false_target,
+    );
+
     Some(())
 }

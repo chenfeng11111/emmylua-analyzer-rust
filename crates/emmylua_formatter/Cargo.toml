@@ -1,0 +1,47 @@
+[package]
+name = "emmylua_formatter"
+version = "0.24.0"
+edition = "2024"
+authors = ["CppCXY"]
+description = "A command-line tool for formatting Lua code"
+license = "MIT"
+repository = "https://github.com/CppCXY/emmylua-analyzer-rust"
+readme = "README.md"
+keywords = ["emmylua", "format", "lua", "cli"]
+categories = ["development-tools"]
+include = [
+    "Cargo.toml",
+    "src/**"
+]
+
+[dependencies]
+serde.workspace = true
+emmylua_parser.workspace = true
+rowan.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+toml_edit.workspace = true
+smol_str.workspace = true
+glob.workspace = true
+walkdir.workspace = true
+hashbrown.workspace = true
+
+[dependencies.clap]
+workspace = true
+optional = true
+
+[dependencies.mimalloc]
+workspace = true
+optional = true
+
+[dependencies.similar]
+workspace = true
+optional = true
+
+[[bin]]
+name = "luafmt"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:mimalloc", "dep:similar"]

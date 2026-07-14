@@ -1,8 +1,8 @@
 use emmylua_code_analysis::{
     DbIndex, LuaMemberInfo, LuaMemberKey, LuaSemanticDeclId, LuaType, LuaTypeDeclId, SemanticModel,
-    enum_variable_is_param, get_tpl_ref_extend_type,
+    enum_variable_is_param,
 };
-use emmylua_parser::{LuaAstNode, LuaAstToken, LuaIndexExpr, LuaStringToken};
+use emmylua_parser::{LuaAstNode, LuaAstToken, LuaIndexExpr, LuaStringToken, LuaSyntaxToken};
 use std::collections::HashMap;
 
 use crate::handlers::completion::{
@@ -10,14 +10,40 @@ use crate::handlers::completion::{
     completion_builder::CompletionBuilder,
 };
 
-pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
+use super::{CompletionProvider, ProviderDecision};
+
+pub struct MemberProvider;
+
+impl CompletionProvider for MemberProvider {
+    fn name(&self) -> &'static str {
+        "member"
+    }
+
+    fn supports(&self, builder: &CompletionBuilder) -> bool {
+        builder
+            .trigger_token
+            .parent()
+            .and_then(LuaIndexExpr::cast)
+            .is_some()
+    }
+
+    fn complete(&self, builder: &mut CompletionBuilder) -> ProviderDecision {
+        if complete_provider(builder).is_some() {
+            ProviderDecision::Continue
+        } else {
+            ProviderDecision::NoMatch
+        }
+    }
+}
+
+fn complete_provider(builder: &mut CompletionBuilder) -> Option<()> {
     if builder.is_cancelled() {
         return None;
     }
 
     let index_expr = LuaIndexExpr::cast(builder.trigger_token.parent()?)?;
     let index_token = index_expr.get_index_token()?;
-    let completion_status = if index_token.is_dot() {
+    let completion_status = if index_token.is_dot() || index_token.is_safe_navigation() {
         CompletionTriggerStatus::Dot
     } else if index_token.is_colon() {
         CompletionTriggerStatus::Colon
@@ -33,13 +59,7 @@ pub fn add_completion(builder: &mut CompletionBuilder) -> Option<()> {
         .infer_expr(prefix_expr.clone())
         .ok()?
     {
-        LuaType::TplRef(tpl) => get_tpl_ref_extend_type(
-            builder.semantic_model.get_db(),
-            &mut builder.semantic_model.get_cache().borrow_mut(),
-            &LuaType::TplRef(tpl.clone()),
-            prefix_expr.clone(),
-            0,
-        )?,
+        LuaType::TplRef(tpl) => tpl.get_constraint().cloned()?,
         prefix_type => prefix_type,
     };
     // 如果是枚举类型且为函数参数, 则不进行补全
@@ -72,7 +92,7 @@ pub fn add_completions_for_members(
 ) -> Option<()> {
     // 排序
     let mut sorted_entries: Vec<_> = members.iter().collect();
-    sorted_entries.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
+    sorted_entries.sort_unstable_by_key(|(name1, _)| *name1);
 
     for (_, member_infos) in sorted_entries {
         add_resolve_member_infos(builder, member_infos, completion_status, None);
@@ -83,79 +103,41 @@ pub fn add_completions_for_members(
 
 fn add_resolve_member_infos(
     builder: &mut CompletionBuilder,
-    member_infos: &Vec<LuaMemberInfo>,
+    member_infos: &[LuaMemberInfo],
     completion_status: CompletionTriggerStatus,
     is_lua_behavior_args: Option<bool>,
 ) -> Option<()> {
     if member_infos.len() == 1 {
         let member_info = &member_infos[0];
-        let overload_count = match &member_info.typ {
-            LuaType::DocFunction(_) => None,
-            LuaType::Signature(id) => {
-                if let Some(signature) = builder
-                    .semantic_model
-                    .get_db()
-                    .get_signature_index()
-                    .get(id)
-                {
-                    let count = signature.overloads.len();
-                    if count == 0 { None } else { Some(count) }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        add_member_completion(
-            builder,
-            member_info.clone(),
-            completion_status,
-            overload_count,
-            is_lua_behavior_args
-        );
+        add_member_completion(builder, member_info.clone(), completion_status);
         return Some(());
     }
 
-    let (filtered_member_infos, overload_count) =
-        filter_member_infos(&builder.semantic_model, member_infos)?;
+    let filtered_member_infos = filter_member_infos(
+        &builder.semantic_model,
+        &builder.trigger_token,
+        member_infos,
+    )?;
 
     let resolve_state = get_resolve_state(builder.semantic_model.get_db(), &filtered_member_infos);
 
     for member_info in filtered_member_infos {
         match resolve_state {
             MemberResolveState::All => {
-                add_member_completion(
-                    builder,
-                    member_info.clone(),
-                    completion_status,
-                    overload_count,
-                    is_lua_behavior_args
-                );
+                add_member_completion(builder, member_info.clone(), completion_status);
             }
             MemberResolveState::Meta => {
                 if let Some(feature) = member_info.feature
                     && feature.is_meta_decl()
                 {
-                    add_member_completion(
-                        builder,
-                        member_info.clone(),
-                        completion_status,
-                        overload_count,
-                        is_lua_behavior_args
-                    );
+                    add_member_completion(builder, member_info.clone(), completion_status);
                 }
             }
             MemberResolveState::FileDecl => {
                 if let Some(feature) = member_info.feature
                     && feature.is_file_decl()
                 {
-                    add_member_completion(
-                        builder,
-                        member_info.clone(),
-                        completion_status,
-                        overload_count,
-                        is_lua_behavior_args
-                    );
+                    add_member_completion(builder, member_info.clone(), completion_status);
                 }
             }
         }
@@ -164,23 +146,35 @@ fn add_resolve_member_infos(
     Some(())
 }
 
-/// 过滤成员信息，返回需要的成员列表和重载数量
+/// 过滤成员信息，返回需要的成员列表
 fn filter_member_infos<'a>(
     semantic_model: &SemanticModel,
-    member_infos: &'a Vec<LuaMemberInfo>,
-) -> Option<(Vec<&'a LuaMemberInfo>, Option<usize>)> {
+    trigger_token: &LuaSyntaxToken,
+    member_infos: &'a [LuaMemberInfo],
+) -> Option<Vec<&'a LuaMemberInfo>> {
     if member_infos.is_empty() {
+        return None;
+    }
+
+    let visible_member_infos: Vec<&LuaMemberInfo> = member_infos
+        .iter()
+        .filter(|member_info| {
+            member_info.property_owner_id.as_ref().is_none_or(|id| {
+                semantic_model.is_semantic_visible(trigger_token.clone(), id.clone())
+            })
+        })
+        .collect();
+    if visible_member_infos.is_empty() {
         return None;
     }
 
     let mut file_decl_member: Option<&LuaMemberInfo> = None;
     let mut member_with_owners: Vec<(&LuaMemberInfo, Option<LuaTypeDeclId>)> =
-        Vec::with_capacity(member_infos.len());
+        Vec::with_capacity(visible_member_infos.len());
     let mut all_doc_function = true;
-    let mut overload_count = 0;
 
     // 一次遍历收集所有信息
-    for member_info in member_infos {
+    for member_info in visible_member_infos {
         let owner_id = get_owner_type_id(semantic_model.get_db(), member_info);
         member_with_owners.push((member_info, owner_id.clone()));
 
@@ -192,18 +186,9 @@ fn filter_member_infos<'a>(
             file_decl_member = Some(member_info);
         }
 
-        // 检查是否全为 DocFunction，同时计算重载数量
+        // 检查是否全为 DocFunction
         match &member_info.typ {
-            LuaType::DocFunction(_) => {
-                overload_count += 1;
-            }
-            LuaType::Signature(id) => {
-                all_doc_function = false;
-                overload_count += 1;
-                if let Some(signature) = semantic_model.get_db().get_signature_index().get(id) {
-                    overload_count += signature.overloads.len();
-                }
-            }
+            LuaType::DocFunction(_) => {}
             _ => {
                 all_doc_function = false;
             }
@@ -243,20 +228,12 @@ fn filter_member_infos<'a>(
         })
         .collect();
 
-    // 处理重载计数
-    let final_overload_count = if overload_count >= 1 {
-        let count = overload_count - 1;
-        if count == 0 { None } else { Some(count) }
-    } else {
-        None
-    };
-
     // 如果全为 DocFunction, 只保留第一个
     if all_doc_function && !filtered_member_infos.is_empty() {
         filtered_member_infos.truncate(1);
     }
 
-    Some((filtered_member_infos, final_overload_count))
+    Some(filtered_member_infos)
 }
 
 enum MemberResolveState {

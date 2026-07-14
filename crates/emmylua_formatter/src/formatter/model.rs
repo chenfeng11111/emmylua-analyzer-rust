@@ -1,0 +1,233 @@
+use hashbrown::{HashMap, HashSet};
+
+use emmylua_parser::{LuaSyntaxId, LuaSyntaxKind, LuaSyntaxToken, LuaTokenKind};
+use smol_str::SmolStr;
+
+use crate::config::LuaFormatConfig;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TokenSpacingExpected {
+    Space(usize),
+    #[allow(unused)]
+    MaxSpace(usize),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SpacingModel {
+    pub has_shebang: bool,
+    left_expected: HashMap<LuaSyntaxId, TokenSpacingExpected>,
+    right_expected: HashMap<LuaSyntaxId, TokenSpacingExpected>,
+    replace_tokens: HashMap<LuaSyntaxId, SmolStr>,
+}
+
+impl SpacingModel {
+    pub fn add_token_left_expected(
+        &mut self,
+        syntax_id: LuaSyntaxId,
+        expected: TokenSpacingExpected,
+    ) {
+        self.left_expected.insert(syntax_id, expected);
+    }
+
+    pub fn add_token_right_expected(
+        &mut self,
+        syntax_id: LuaSyntaxId,
+        expected: TokenSpacingExpected,
+    ) {
+        self.right_expected.insert(syntax_id, expected);
+    }
+
+    pub fn left_expected(&self, syntax_id: LuaSyntaxId) -> Option<&TokenSpacingExpected> {
+        self.left_expected.get(&syntax_id)
+    }
+
+    pub fn right_expected(&self, syntax_id: LuaSyntaxId) -> Option<&TokenSpacingExpected> {
+        self.right_expected.get(&syntax_id)
+    }
+
+    pub fn add_token_replace(&mut self, syntax_id: LuaSyntaxId, replacement: SmolStr) {
+        self.replace_tokens.insert(syntax_id, replacement);
+    }
+
+    pub fn token_replace(&self, syntax_id: LuaSyntaxId) -> Option<&str> {
+        self.replace_tokens.get(&syntax_id).map(SmolStr::as_str)
+    }
+
+    pub fn gap_expected(
+        &self,
+        previous: Option<&LuaSyntaxToken>,
+        current: Option<&LuaSyntaxToken>,
+    ) -> Option<&TokenSpacingExpected> {
+        let current_expected =
+            current.and_then(|token| self.left_expected(LuaSyntaxId::from_token(token)));
+        let previous_expected =
+            previous.and_then(|token| self.right_expected(LuaSyntaxId::from_token(token)));
+
+        if current_expected.is_some() {
+            return current_expected;
+        }
+
+        if let Some(promoted) = self.promote_previous_left_expected(previous, current) {
+            return Some(promoted);
+        }
+
+        previous_expected
+    }
+
+    fn promote_previous_left_expected(
+        &self,
+        previous: Option<&LuaSyntaxToken>,
+        current: Option<&LuaSyntaxToken>,
+    ) -> Option<&TokenSpacingExpected> {
+        let previous = previous?;
+        let current = current?;
+        if !matches!(
+            previous.kind().to_token(),
+            LuaTokenKind::TkPlus | LuaTokenKind::TkMinus
+        ) {
+            return None;
+        }
+        if !matches!(
+            current.kind().to_token(),
+            LuaTokenKind::TkName | LuaTokenKind::TkInt | LuaTokenKind::TkFloat
+        ) {
+            return None;
+        }
+
+        let previous_id = LuaSyntaxId::from_token(previous);
+        let left = self.left_expected(previous_id)?;
+        let right = self.right_expected(previous_id)?;
+        if !matches!(left, TokenSpacingExpected::Space(1))
+            || !matches!(right, TokenSpacingExpected::Space(0))
+        {
+            return None;
+        }
+
+        let mut probe = previous.clone();
+        while let Some(candidate) = probe.prev_token() {
+            match candidate.kind().to_token() {
+                LuaTokenKind::TkWhitespace | LuaTokenKind::TkEndOfLine => probe = candidate,
+                _ => {
+                    let candidate_id = LuaSyntaxId::from_token(&candidate);
+                    let candidate_left = self.left_expected(candidate_id);
+                    if matches!(candidate_left, Some(TokenSpacingExpected::Space(1))) {
+                        return None;
+                    }
+                    return Some(left);
+                }
+            }
+        }
+
+        Some(left)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SyntaxNodeLayoutPlan {
+    pub syntax_id: LuaSyntaxId,
+    pub kind: LuaSyntaxKind,
+    pub children: Vec<LayoutNodePlan>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommentLayoutPlan {
+    pub syntax_id: LuaSyntaxId,
+}
+
+#[derive(Clone, Debug)]
+pub enum LayoutNodePlan {
+    Syntax(SyntaxNodeLayoutPlan),
+    Comment(CommentLayoutPlan),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatementTriviaLayoutPlan {
+    pub has_inline_comment: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ControlHeaderLayoutPlan {
+    pub has_inline_comment: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BoundaryCommentLayoutPlan {
+    pub comment_ids: Vec<LuaSyntaxId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatementExprListLayoutKind {
+    Sequence,
+    PreserveFirstMultiline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatementExprListLayoutPlan {
+    pub kind: StatementExprListLayoutKind,
+    pub first_line_prefix_width: usize,
+    pub attach_single_value_head: bool,
+    pub allow_fill: bool,
+    pub allow_packed: bool,
+    pub allow_one_per_line: bool,
+    pub prefer_balanced_break_lines: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExprSequenceLayoutPlan {
+    pub first_line_prefix_width: usize,
+    pub preserve_multiline: bool,
+    pub first_arg_multiline_block: bool,
+    pub first_arg_multiline_table: bool,
+    pub single_inline_block_arg_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LayoutModel {
+    pub format_block_with_legacy: bool,
+    pub root_nodes: Vec<LayoutNodePlan>,
+    pub closure_body_children: HashMap<LuaSyntaxId, Vec<LayoutNodePlan>>,
+    pub format_disabled: HashSet<LuaSyntaxId>,
+    pub statement_trivia: HashMap<LuaSyntaxId, StatementTriviaLayoutPlan>,
+    pub statement_expr_lists: HashMap<LuaSyntaxId, StatementExprListLayoutPlan>,
+    pub expr_sequences: HashMap<LuaSyntaxId, ExprSequenceLayoutPlan>,
+    pub control_headers: HashMap<LuaSyntaxId, ControlHeaderLayoutPlan>,
+    pub control_header_expr_lists: HashMap<LuaSyntaxId, StatementExprListLayoutPlan>,
+    pub boundary_comments: HashMap<LuaSyntaxId, HashMap<LuaTokenKind, BoundaryCommentLayoutPlan>>,
+    pub block_excluded_comments: HashMap<LuaSyntaxId, Vec<LuaSyntaxId>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LineBreakModel {
+    pub insert_final_newline: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FormatPlan {
+    pub spacing: SpacingModel,
+    pub layout: LayoutModel,
+    pub line_breaks: LineBreakModel,
+}
+
+impl FormatPlan {
+    pub fn from_config(config: &LuaFormatConfig) -> Self {
+        Self {
+            spacing: SpacingModel::default(),
+            layout: LayoutModel {
+                format_block_with_legacy: true,
+                root_nodes: Vec::new(),
+                closure_body_children: HashMap::new(),
+                format_disabled: HashSet::new(),
+                statement_trivia: HashMap::new(),
+                statement_expr_lists: HashMap::new(),
+                expr_sequences: HashMap::new(),
+                control_headers: HashMap::new(),
+                control_header_expr_lists: HashMap::new(),
+                boundary_comments: HashMap::new(),
+                block_excluded_comments: HashMap::new(),
+            },
+            line_breaks: LineBreakModel {
+                insert_final_newline: config.output.insert_final_newline,
+            },
+        }
+    }
+}

@@ -1,22 +1,27 @@
+mod collect_overloads;
+mod filter_overloads;
 mod resolve_signature_by_args;
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
-use emmylua_parser::{LuaCallExpr, LuaExpr};
+use emmylua_parser::{LuaAstNode, LuaCallExpr};
 
-use crate::{
-    VariadicType,
-    db_index::{DbIndex, LuaFunctionType, LuaType},
-    infer_expr,
-};
+use crate::db_index::{DbIndex, LuaFunctionType, LuaType};
 
 use super::{
     LuaInferCache,
-    generic::instantiate_func_generic,
-    infer::{InferCallFuncResult, InferFailReason},
+    generic::infer_call_generic,
+    infer::{InferCallFuncResult, InferFailReason, infer_expr_list_types, try_infer_expr_no_flow},
 };
 
-use resolve_signature_by_args::resolve_signature_by_args;
+pub(crate) use collect_overloads::call_operator_self_type;
+pub use collect_overloads::collect_callable_overload_groups;
+pub(crate) use filter_overloads::match_callable_by_arg_types;
+pub use filter_overloads::{filter_callable_overloads, find_callable_overload};
+pub(crate) use resolve_signature_by_args::{
+    callable_accepts_args, get_func_param_type, is_func_last_param_variadic,
+    resolve_signature_by_args,
+};
 
 pub fn resolve_signature(
     db: &DbIndex,
@@ -27,12 +32,37 @@ pub fn resolve_signature(
     arg_count: Option<usize>,
 ) -> InferCallFuncResult {
     let args = call_expr.get_args_list().ok_or(InferFailReason::None)?;
-    let expr_types = infer_expr_list_types(
+    let mut declined_no_flow_arg_ranges = Vec::new();
+    let expr_types_with_ranges = infer_expr_list_types(
         db,
         cache,
         args.get_args().collect::<Vec<_>>().as_slice(),
         arg_count,
-    );
+        |db, cache, expr| {
+            if cache.is_no_flow() {
+                let expr_range = expr.get_range();
+                let Some(expr_type) = try_infer_expr_no_flow(db, cache, expr)? else {
+                    if !is_generic {
+                        declined_no_flow_arg_ranges.push(expr_range);
+                        return Ok(LuaType::Unknown);
+                    }
+                    return Err(InferFailReason::None);
+                };
+                Ok(expr_type)
+            } else {
+                Ok(crate::infer_expr(db, cache, expr).unwrap_or(LuaType::Unknown))
+            }
+        },
+    )?;
+    let declined_no_flow_args = expr_types_with_ranges
+        .iter()
+        .map(|(_, range)| declined_no_flow_arg_ranges.contains(range))
+        .collect::<Vec<_>>();
+    let expr_types: Vec<_> = expr_types_with_ranges
+        .into_iter()
+        .map(|(ty, _)| ty)
+        .collect();
+
     if is_generic {
         resolve_signature_by_generic(db, cache, overloads, call_expr, expr_types, arg_count)
     } else {
@@ -42,6 +72,7 @@ pub fn resolve_signature(
             &expr_types,
             call_expr.is_colon_call(),
             arg_count,
+            &declined_no_flow_args,
         )
     }
 }
@@ -56,7 +87,7 @@ fn resolve_signature_by_generic(
 ) -> InferCallFuncResult {
     let mut instantiate_funcs = Vec::new();
     for func in overloads {
-        let instantiate_func = instantiate_func_generic(db, cache, &func, call_expr.clone())?;
+        let instantiate_func = infer_call_generic(db, cache, &func, call_expr.clone())?;
         instantiate_funcs.push(Arc::new(instantiate_func));
     }
     resolve_signature_by_args(
@@ -65,48 +96,6 @@ fn resolve_signature_by_generic(
         &expr_types,
         call_expr.is_colon_call(),
         arg_count,
+        &[],
     )
-}
-
-fn infer_expr_list_types(
-    db: &DbIndex,
-    cache: &mut LuaInferCache,
-    exprs: &[LuaExpr],
-    var_count: Option<usize>,
-) -> Vec<LuaType> {
-    let mut value_types = Vec::new();
-    for (idx, expr) in exprs.iter().enumerate() {
-        let expr_type = infer_expr(db, cache, expr.clone()).unwrap_or(LuaType::Unknown);
-        match expr_type {
-            LuaType::Variadic(variadic) => {
-                if let Some(var_count) = var_count {
-                    if idx < var_count {
-                        for i in idx..var_count {
-                            if let Some(typ) = variadic.get_type(i - idx) {
-                                value_types.push(typ.clone());
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    match variadic.deref() {
-                        VariadicType::Base(base) => {
-                            value_types.push(base.clone());
-                        }
-                        VariadicType::Multi(vecs) => {
-                            for typ in vecs {
-                                value_types.push(typ.clone());
-                            }
-                        }
-                    }
-                }
-
-                break;
-            }
-            _ => value_types.push(expr_type.clone()),
-        }
-    }
-
-    value_types
 }

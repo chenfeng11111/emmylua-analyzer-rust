@@ -3,8 +3,8 @@ use std::sync::Arc;
 use rowan::{TextRange, TextSize};
 
 use crate::{
-    DbIndex, FileId, InFiled, InferFailReason, LuaFunctionType, LuaSignatureId,
-    SignatureReturnStatus,
+    AsyncState, DbIndex, FileId, InFiled, InferFailReason, LuaConstructorReturnMode,
+    LuaFunctionType, LuaSignature, LuaSignatureId, SignatureReturnStatus,
     db_index::{LuaType, LuaTypeDeclId},
 };
 
@@ -21,12 +21,29 @@ pub struct LuaOperator {
 
 #[derive(Debug, Clone)]
 pub enum OperatorFunction {
-    Func(Arc<LuaFunctionType>),
+    // One explicit parameter: `@operator add(T): R`, `@operator sub(T): R`, or `@field [K] V`.
+    BinOp {
+        param: LuaType,
+        ret: LuaType,
+    },
+    // Unary declarations such as `@operator unm: R` or `@operator len: R`.
+    UnOp {
+        ret: LuaType,
+    },
+    // `@operator call(...)`.
+    Call {
+        params: Vec<LuaType>,
+        ret: LuaType,
+    },
+    // `@overload fun(...)`.
+    Overload(Arc<LuaFunctionType>),
+    // Runtime metatable closures like `__add = function(...)` or `__call = function(...)`.
     Signature(LuaSignatureId),
+    // Synthesized call operator for default class constructors.
     DefaultClassCtor {
         id: LuaSignatureId,
         strip_self: bool,
-        return_self: bool,
+        return_mode: LuaConstructorReturnMode,
     },
 }
 
@@ -57,14 +74,7 @@ impl LuaOperator {
 
     pub fn get_operand(&self, db: &DbIndex) -> LuaType {
         match &self.func {
-            OperatorFunction::Func(func) => {
-                let params = func.get_params();
-                if params.len() >= 2 {
-                    return params[1].1.clone().unwrap_or(LuaType::Any);
-                }
-
-                LuaType::Any
-            }
+            OperatorFunction::BinOp { param, .. } => param.clone(),
             OperatorFunction::Signature(signature) => {
                 let signature = db.get_signature_index().get(signature);
                 if let Some(signature) = signature {
@@ -76,14 +86,19 @@ impl LuaOperator {
 
                 LuaType::Any
             }
-            // 只有 .field 才有`operand`, call 不会有这个
-            OperatorFunction::DefaultClassCtor { .. } => LuaType::Unknown,
+            OperatorFunction::Overload(_)
+            | OperatorFunction::UnOp { .. }
+            | OperatorFunction::Call { .. }
+            | OperatorFunction::DefaultClassCtor { .. } => LuaType::Unknown,
         }
     }
 
     pub fn get_result(&self, db: &DbIndex) -> Result<LuaType, InferFailReason> {
         match &self.func {
-            OperatorFunction::Func(func) => Ok(func.get_ret().clone()),
+            OperatorFunction::BinOp { ret, .. }
+            | OperatorFunction::UnOp { ret }
+            | OperatorFunction::Call { ret, .. } => Ok(ret.clone()),
+            OperatorFunction::Overload(func) => Ok(func.get_ret().clone()),
             OperatorFunction::Signature(signature_id) => {
                 let signature = db.get_signature_index().get(signature_id);
                 if let Some(signature) = signature {
@@ -100,18 +115,12 @@ impl LuaOperator {
                 Ok(LuaType::Any)
             }
             OperatorFunction::DefaultClassCtor {
-                id, return_self, ..
+                id, return_mode, ..
             } => {
-                if *return_self {
-                    return Ok(LuaType::SelfInfer);
-                }
-
                 let signature = db.get_signature_index().get(id);
                 if let Some(signature) = signature {
-                    let return_type = signature.return_docs.first();
-                    if let Some(return_type) = return_type {
-                        return Ok(return_type.type_ref.clone());
-                    }
+                    let return_type = get_constructor_return_type(signature, return_mode);
+                    return Ok(return_type);
                 }
 
                 Ok(LuaType::Any)
@@ -121,37 +130,80 @@ impl LuaOperator {
 
     pub fn get_operator_func(&self, db: &DbIndex) -> LuaType {
         match &self.func {
-            OperatorFunction::Func(func) => LuaType::DocFunction(func.clone()),
+            OperatorFunction::BinOp { param, ret } => LuaFunctionType::new(
+                AsyncState::None,
+                false,
+                false,
+                vec![
+                    ("self".to_string(), Some(LuaType::SelfInfer)),
+                    ("arg0".to_string(), Some(param.clone())),
+                ],
+                ret.clone(),
+                None,
+            )
+            .into(),
+            OperatorFunction::UnOp { ret } => LuaFunctionType::new(
+                AsyncState::None,
+                false,
+                false,
+                vec![("self".to_string(), Some(LuaType::SelfInfer))],
+                ret.clone(),
+                None,
+            )
+            .into(),
+            OperatorFunction::Call { params, ret } => {
+                let is_variadic = params.last().is_some_and(LuaType::is_variadic);
+                let last_param_idx = params.len().saturating_sub(1);
+                let params = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, param)| {
+                        let name = if is_variadic && i == last_param_idx {
+                            "...".to_string()
+                        } else {
+                            format!("arg{}", i)
+                        };
+                        (name, Some(param.clone()))
+                    })
+                    .collect();
+
+                LuaFunctionType::new(
+                    AsyncState::None,
+                    false,
+                    is_variadic,
+                    params,
+                    ret.clone(),
+                    None,
+                )
+                .into()
+            }
+            OperatorFunction::Overload(func) => {
+                LuaType::DocFunction(func.to_call_operator_func_type())
+            }
             OperatorFunction::Signature(signature) => LuaType::Signature(*signature),
             OperatorFunction::DefaultClassCtor {
                 id,
                 strip_self,
-                return_self,
-            } => {
-                if let Some(signature) = db.get_signature_index().get(id) {
-                    let params = signature.get_type_params();
-                    let is_colon_define = if *strip_self {
-                        false
-                    } else {
-                        signature.is_colon_define
-                    };
-                    let return_type = if *return_self {
-                        LuaType::SelfInfer
-                    } else {
-                        signature.get_return_type()
-                    };
-                    let func_type = LuaFunctionType::new(
-                        signature.async_state,
-                        is_colon_define,
-                        signature.is_vararg,
-                        params,
-                        return_type,
-                    );
-                    return LuaType::DocFunction(Arc::new(func_type));
-                }
+                return_mode,
+            } => match db.get_signature_index().get(id) {
+                Some(signature) => LuaFunctionType::new(
+                    signature.async_state,
+                    !*strip_self && signature.is_colon_define,
+                    signature.is_vararg,
+                    signature.get_type_params(),
+                    get_constructor_return_type(signature, return_mode),
+                    Some(signature.get_function_generic_params()),
+                )
+                .into(),
+                None => LuaType::Signature(*id),
+            },
+        }
+    }
 
-                LuaType::Signature(*id)
-            }
+    pub fn get_default_class_ctor_signature_id(&self) -> Option<LuaSignatureId> {
+        match self.func {
+            OperatorFunction::DefaultClassCtor { id, .. } => Some(id),
+            _ => None,
         }
     }
 
@@ -199,4 +251,22 @@ impl From<InFiled<TextRange>> for LuaOperatorOwner {
     fn from(id: InFiled<TextRange>) -> Self {
         LuaOperatorOwner::Table(id)
     }
+}
+
+fn get_constructor_return_type(
+    signature: &LuaSignature,
+    return_mode: &LuaConstructorReturnMode,
+) -> LuaType {
+    let return_type = match *return_mode {
+        LuaConstructorReturnMode::SelfType => LuaType::SelfInfer,
+        LuaConstructorReturnMode::Doc => signature.get_return_type(),
+        LuaConstructorReturnMode::Default => {
+            if signature.resolve_return == SignatureReturnStatus::DocResolve {
+                signature.get_return_type()
+            } else {
+                LuaType::SelfInfer
+            }
+        }
+    };
+    return_type
 }

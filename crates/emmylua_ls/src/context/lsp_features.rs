@@ -33,6 +33,14 @@ impl LspFeatures {
         false
     }
 
+    pub fn supports_work_done_progress(&self) -> bool {
+        self.client_capabilities
+            .window
+            .as_ref()
+            .and_then(|window| window.work_done_progress)
+            .unwrap_or_default()
+    }
+
     pub fn supports_pull_diagnostic(&self) -> bool {
         if let Some(text_document) = &self.client_capabilities.text_document {
             return text_document.diagnostic.is_some();
@@ -53,5 +61,14 @@ impl LspFeatures {
             }
         }
         false
+    }
+
+    pub fn supports_dynamic_watched_files_registration(&self) -> bool {
+        self.client_capabilities
+            .workspace
+            .as_ref()
+            .and_then(|ws| ws.did_change_watched_files.as_ref())
+            .and_then(|watch| watch.dynamic_registration)
+            .unwrap_or_default()
     }
 }

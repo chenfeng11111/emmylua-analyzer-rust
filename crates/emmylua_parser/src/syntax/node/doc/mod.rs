@@ -16,9 +16,17 @@ use crate::{
     syntax::traits::LuaAstNode,
 };
 
+use rowan::SyntaxElement;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LuaComment {
     syntax: LuaSyntaxNode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LuaCommentFormatDirective {
+    FormatOff,
+    FormatOn,
 }
 
 impl LuaAstNode for LuaComment {
@@ -52,7 +60,6 @@ fn is_additive_doc_tag(kind: LuaSyntaxKind) -> bool {
     matches!(
         kind,
         LuaSyntaxKind::DocTagVisibility
-            | LuaSyntaxKind::DocTagExport
             | LuaSyntaxKind::DocTagVersion
             | LuaSyntaxKind::DocTagNodiscard
     )
@@ -90,6 +97,79 @@ impl LuaComment {
         }
         None
     }
+
+    pub fn get_format_directive(&self) -> Option<LuaCommentFormatDirective> {
+        let first_token = self.syntax.first_token()?;
+        if first_token.text().starts_with("---") {
+            return None;
+        }
+
+        let mut line_state = CommentDirectiveLineState::AwaitPrefix;
+        for element in self.syntax.descendants_with_tokens() {
+            let Some(token) = element.into_token() else {
+                continue;
+            };
+
+            match token.kind().to_token() {
+                LuaTokenKind::TkEndOfLine => {
+                    line_state = CommentDirectiveLineState::AwaitPrefix;
+                }
+                LuaTokenKind::TkWhitespace
+                    if matches!(
+                        line_state,
+                        CommentDirectiveLineState::AwaitPrefix
+                            | CommentDirectiveLineState::AwaitBody
+                    ) => {}
+                LuaTokenKind::TkNormalStart
+                    if matches!(line_state, CommentDirectiveLineState::AwaitPrefix) =>
+                {
+                    line_state = if token.text().starts_with("---") {
+                        CommentDirectiveLineState::SkipLine
+                    } else {
+                        CommentDirectiveLineState::AwaitBody
+                    };
+                }
+                _ if matches!(line_state, CommentDirectiveLineState::AwaitBody) => {
+                    if let Some(directive) = parse_comment_format_directive_text(token.text()) {
+                        return Some(directive);
+                    }
+                    line_state = CommentDirectiveLineState::SkipLine;
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommentDirectiveLineState {
+    AwaitPrefix,
+    AwaitBody,
+    SkipLine,
+}
+
+fn parse_comment_format_directive_text(text: &str) -> Option<LuaCommentFormatDirective> {
+    let directive = text.trim_start().strip_prefix("fmt:")?.trim_start();
+
+    if starts_with_directive_keyword(directive, "off") {
+        return Some(LuaCommentFormatDirective::FormatOff);
+    }
+
+    if starts_with_directive_keyword(directive, "on") {
+        return Some(LuaCommentFormatDirective::FormatOn);
+    }
+
+    None
+}
+
+fn starts_with_directive_keyword(text: &str, keyword: &str) -> bool {
+    let Some(rest) = text.strip_prefix(keyword) else {
+        return false;
+    };
+
+    rest.is_empty() || rest.starts_with(char::is_whitespace)
 }
 
 fn find_inline_node(comment: &LuaSyntaxNode) -> Option<LuaSyntaxNode> {
@@ -235,12 +315,59 @@ impl LuaDocGenericDecl {
         self.token()
     }
 
-    pub fn get_type(&self) -> Option<LuaDocType> {
-        self.child()
+    pub fn get_constraint_type(&self) -> Option<LuaDocType> {
+        let mut seen_constraint = false;
+
+        for element in self.syntax().children_with_tokens() {
+            match element {
+                SyntaxElement::Token(token) => {
+                    let kind: LuaTokenKind = token.kind().into();
+                    match kind {
+                        LuaTokenKind::TkColon | LuaTokenKind::TkDocExtends | LuaTokenKind::TkIn => {
+                            seen_constraint = true;
+                        }
+                        LuaTokenKind::TkDocMatch => return None,
+                        _ => {}
+                    }
+                }
+                SyntaxElement::Node(node) => {
+                    if seen_constraint && LuaDocType::can_cast(node.kind().into()) {
+                        return LuaDocType::cast(node);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn get_default_type(&self) -> Option<LuaDocType> {
+        let mut seen_assign = false;
+
+        for element in self.syntax().children_with_tokens() {
+            match element {
+                SyntaxElement::Token(token) => {
+                    if LuaTokenKind::from(token.kind()) == LuaTokenKind::TkDocMatch {
+                        seen_assign = true;
+                    }
+                }
+                SyntaxElement::Node(node) => {
+                    if seen_assign && LuaDocType::can_cast(node.kind().into()) {
+                        return LuaDocType::cast(node);
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     pub fn is_variadic(&self) -> bool {
         self.token_by_kind(LuaTokenKind::TkDots).is_some()
+    }
+
+    pub fn has_const_modifier(&self) -> bool {
+        self.token_by_kind(LuaTokenKind::TkDocConst).is_some()
     }
 }
 
