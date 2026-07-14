@@ -70,13 +70,13 @@ pub fn get_lua_behavior_args_map(
     // 获取类型声明并检查是否为 lua_behavior
     let type_index = db.get_type_index();
     let type_decl = type_index.get_type_decl(type_decl_id)?;
-    if !type_decl.is_lua_behavior(db, &InferGuard::new()) {
+    if !type_decl.is_lua_behavior(db, &crate::InferGuard::new()) {
         return None;
     }
 
     // 获取 args 成员
-    let owner = LuaMemberOwner::Type(type_decl_id.clone());
-    let args_key = LuaMemberKey::Name(SmolStr::new("args"));
+    let owner = crate::LuaMemberOwner::Type(type_decl_id.clone());
+    let args_key = LuaMemberKey::Name(smol_str::SmolStr::new("args"));
     let args_member = db.get_member_index().get_member_item(&owner, &args_key)?;
 
     // 解析 args 类型
@@ -89,7 +89,7 @@ pub fn get_lua_behavior_args_map(
     let member_map = members.into_iter().map(|member| {
         // 重命名 key
         let new_key = match &member.key {
-            LuaMemberKey::Name(name) => LuaMemberKey::Name(SmolStr::new(format!("_{}", name))),
+            LuaMemberKey::Name(name) => LuaMemberKey::Name(smol_str::SmolStr::new(format!("_{}", name))),
             _ => member.key.clone(),
         };
 

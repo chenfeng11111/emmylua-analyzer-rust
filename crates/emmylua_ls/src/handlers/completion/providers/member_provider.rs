@@ -80,7 +80,7 @@ fn complete_provider(builder: &mut CompletionBuilder) -> Option<()> {
     // 添加
     let member_info_map = builder.semantic_model.get_lua_behavior_args_map(&prefix_type)?;
     for (_, member_infos) in member_info_map.iter() {
-        add_resolve_member_infos(builder, &member_infos, completion_status, true.into());
+        add_resolve_member_infos(builder, &member_infos, completion_status);
     }
     Some(())
 }
@@ -95,7 +95,7 @@ pub fn add_completions_for_members(
     sorted_entries.sort_unstable_by_key(|(name1, _)| *name1);
 
     for (_, member_infos) in sorted_entries {
-        add_resolve_member_infos(builder, member_infos, completion_status, None);
+        add_resolve_member_infos(builder, member_infos, completion_status);
     }
 
     Some(())
@@ -105,7 +105,6 @@ fn add_resolve_member_infos(
     builder: &mut CompletionBuilder,
     member_infos: &[LuaMemberInfo],
     completion_status: CompletionTriggerStatus,
-    is_lua_behavior_args: Option<bool>,
 ) -> Option<()> {
     if member_infos.len() == 1 {
         let member_info = &member_infos[0];

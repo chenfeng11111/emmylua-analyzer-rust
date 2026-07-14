@@ -28,9 +28,9 @@ pub fn add_decl_completion(
     let mut completion_item = CompletionItem {
         label: name.to_string(),
         kind: Some(get_completion_kind(typ)),
-        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        insert_text_format: Some(lsp_types::InsertTextFormat::SNIPPET),
         insert_text: Some(insert_text),
-        data: CompletionData::from_property_owner_id(builder, decl_id.into(), overload_count),
+        data: CompletionData::from_property_owner_id(builder, decl_id.into()),
         label_details: Some(lsp_types::CompletionItemLabelDetails {
             detail: get_detail(builder, typ, CallDisplay::None, false),
             description: get_description(builder, typ),

@@ -266,7 +266,7 @@ fn add_field_key_completion(
         .as_ref()
         .map(|id| is_deprecated(builder, id.clone()));
 
-    let description = humanize_type(builder.semantic_model.get_db(), &typ, RenderLevel::Brief);
+    let description = emmylua_code_analysis::humanize_type(builder.semantic_model.get_db(), &typ, emmylua_code_analysis::RenderLevel::Brief);
     let completion_item = CompletionItem {
         label,
         kind: Some(lsp_types::CompletionItemKind::PROPERTY),

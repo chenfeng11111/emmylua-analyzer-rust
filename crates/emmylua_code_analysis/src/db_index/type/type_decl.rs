@@ -91,7 +91,7 @@ impl LuaTypeDecl {
         matches!(self.extra, LuaTypeExtra::Alias { .. })
     }
 
-    pub fn is_lua_behavior(&self, db: &DbIndex, infer_guard: &InferGuard) -> bool {
+    pub fn is_lua_behavior(&self, db: &DbIndex, infer_guard: &crate::InferGuard) -> bool {
         let check = infer_guard.check(&self.id);
         match check {
             Ok(_) => {}

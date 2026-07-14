@@ -412,7 +412,7 @@ fn infer_custom_type_member(
     }
 
     if type_decl.is_class() {
-        let name_str = key.get_name();
+        let name_str = lookup.key.get_name();
         if let Some(name_str) = name_str {
             if db.get_emmyrc().runtime.constructor.contains(&String::from(name_str)) {
                 // 构造函数
@@ -439,14 +439,10 @@ fn infer_custom_type_member(
                     false,
                     false,
                     params,
-                    LuaType::SelfInfer
+                    LuaType::SelfInfer,
+                    None
                 ).into()));
             }
-        }
-
-
-        let name = key.get_name();
-        if let Some(name_str) = name {
             // super父类
             if name_str == "super" {
                 if let Some(super_types) = type_index.get_super_types(&prefix_type_id) {
@@ -457,7 +453,7 @@ fn infer_custom_type_member(
             }
         }
 
-        if let Some(member_item) = db.get_member_index().get_member_lua_behavior(db, &prefix_type_id, &key) {
+        if let Some(member_item) = db.get_member_index().get_member_lua_behavior(db, &prefix_type_id, &lookup.key) {
             // lua behavior args成员
             return member_item.resolve_type(db);
         }

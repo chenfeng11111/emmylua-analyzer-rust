@@ -192,6 +192,7 @@ impl<'a> TypeHumanizer<'a> {
             LuaType::Array(arr_inner) => self.write_array_type(arr_inner.get_base(), w),
             LuaType::Call(alias_call) => self.write_call_type(alias_call, w),
             LuaType::DocFunction(lua_func) => self.write_doc_function_type(lua_func, w),
+            LuaType::ConstructorFunction(lua_func) => self.write_doc_function_type(lua_func, w),
             LuaType::Object(object) => self.write_object_type(object, w),
             LuaType::Intersection(inter) => self.write_intersect_type(inter, w),
             LuaType::Generic(generic) => self.write_generic_type(generic, w),

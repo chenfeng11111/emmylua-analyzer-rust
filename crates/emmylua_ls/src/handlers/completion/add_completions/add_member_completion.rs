@@ -174,7 +174,7 @@ pub fn add_member_completion(
     if can_add_snippet && builder.support_snippets(typ) {
         if let Some(snippet) = get_function_snippet(builder, &label, typ, call_display) {
             completion_item.insert_text = Some(snippet);
-            completion_item.insert_text_format = Some(lsp_types::InsertTextFormat::SNIPPET);
+            completion_item.insert_text_format = Some(InsertTextFormat::SNIPPET);
         }
     }
 

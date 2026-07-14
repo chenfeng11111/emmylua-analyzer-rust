@@ -236,7 +236,7 @@ impl LuaMemberIndex {
         prefix_type_id: &LuaTypeDeclId,
     ) -> Option<&LuaMemberIndexItem> {
         // 准备搜索"ctor"成员
-        let ctor_key = LuaMemberKey::Name(SmolStr::new("ctor"));
+        let ctor_key = LuaMemberKey::Name(smol_str::SmolStr::new("ctor"));
         let current_owner = LuaMemberOwner::Type(prefix_type_id.clone());
         let type_index = db.get_type_index();
 
@@ -302,13 +302,13 @@ impl LuaMemberIndex {
 
         // 处理args字段
         let owner = LuaMemberOwner::Type(prefix_type_id.clone());
-        let args_member = self.get_member_item(&owner, &LuaMemberKey::Name(SmolStr::new("args")))?;
+        let args_member = self.get_member_item(&owner, &LuaMemberKey::Name(smol_str::SmolStr::new("args")))?;
 
         // 解析 args 类型并查找对应的字段
         if let Ok(LuaType::TableConst(table_id)) = args_member.resolve_type(db) {
             let field_name = name_str.strip_prefix('_')?;
             let table_owner = LuaMemberOwner::Element(table_id);
-            self.get_member_item(&table_owner, &LuaMemberKey::Name(SmolStr::new(field_name)))
+            self.get_member_item(&table_owner, &LuaMemberKey::Name(smol_str::SmolStr::new(field_name)))
         } else {
             None
         }

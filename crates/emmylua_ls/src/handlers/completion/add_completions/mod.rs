@@ -270,10 +270,10 @@ fn get_function_insert_text(
     let document = builder.semantic_model.get_document();
     let text_len = document.get_valid_range();
 
-    let next_is_parenthesis = if end.add(TextSize::new(1)) > TextSize::new(text_len) {
+    let next_is_parenthesis = if end.add(rowan::TextSize::new(1)) > rowan::TextSize::new(text_len) {
         false
     } else {
-        let range = TextRange::new(end, end.add(TextSize::new(1)));
+        let range = rowan::TextRange::new(end, end.add(rowan::TextSize::new(1)));
         let char = document.get_text_slice(range);
         char == "("
     };
