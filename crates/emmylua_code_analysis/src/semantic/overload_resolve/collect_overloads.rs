@@ -87,6 +87,7 @@ fn collect_callable_overload_groups_inner(
             }
         }
         LuaType::DocFunction(doc_func) => groups.push(vec![doc_func.clone()]),
+        LuaType::ConstructorFunction(func) => groups.push(vec![func.clone()]),
         LuaType::Signature(sig_id) => {
             let Some(signature) = db.get_signature_index().get(sig_id) else {
                 return Ok(());

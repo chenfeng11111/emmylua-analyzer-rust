@@ -129,7 +129,7 @@ pub fn infer_call_expr_func(
         LuaType::Union(union) => infer_union(db, cache, union, call_expr.clone(), args_count),
         LuaType::ConstructorFunction(func) => {
             // 返回自身类型
-            Ok(func.clone().into())
+            Ok(func.clone())
         }
         _ => Err(InferFailReason::None),
     };
