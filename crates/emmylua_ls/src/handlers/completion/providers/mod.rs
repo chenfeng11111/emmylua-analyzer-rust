@@ -53,14 +53,13 @@ pub trait CompletionProvider: Sync {
 
 static GENERAL_PRIMARY_PROVIDERS: &[&dyn CompletionProvider] = &[
     &ArrayAppendProvider,
-    &PostfixProvider,
     &FunctionProvider,
     &EqualityProvider,
     &TableFieldProvider,
 ];
 
 static GENERAL_SECONDARY_PROVIDERS: &[&dyn CompletionProvider] =
-    &[&EnvProvider, &KeywordsProvider, &MemberProvider];
+    &[&EnvProvider, &KeywordsProvider, &MemberProvider, &PostfixProvider];
 
 static GENERAL_TERTIARY_PROVIDERS: &[&dyn CompletionProvider] = &[&AutoRequireProvider];
 
