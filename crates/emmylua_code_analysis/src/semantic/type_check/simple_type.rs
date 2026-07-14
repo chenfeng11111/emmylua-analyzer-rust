@@ -122,7 +122,7 @@ pub fn check_simple_type_compact(
             _ => {}
         },
         LuaType::Integer | LuaType::IntegerConst(_) => match compact_type {
-            LuaType::Integer | LuaType::IntegerConst(_) | LuaType::DocIntegerConst(_) | LuaType::Number | LuaType::FloatConst(_) | LuaType::DocIntegerConst(_) => {
+            LuaType::Integer | LuaType::IntegerConst(_) | LuaType::DocIntegerConst(_) | LuaType::Number | LuaType::FloatConst(_) => {
                 return Ok(());
             }
             LuaType::Ref(_) => {
